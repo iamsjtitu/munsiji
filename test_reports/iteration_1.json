@@ -1,0 +1,40 @@
+{
+  "summary": "Fresh build validation of Munsiji.app — end-to-end backend + mobile UI testing. 24/24 pytest backend tests passed (auth, groups, ledger CRUD, txn recalc, statement running balance, merge, exports for pdf/excel/csv served publicly with send_whatsapp=true via mock provider, dashboard, monthly summary, settings, PIN change, AI whatsapp simulate flow with new party creation → fuzzy match → credit → 'ledger bhej' clarify → pdf export files[], last-entry delete, webhook processed+dedupe+non-whitelist ignored, wa messages/status). 100% mobile UI flows passed on 390x844 viewport: PIN screen, wrong PIN error 'Galat PIN', login with 3366 → home dashboard with 5 default group cards + total lena/dena, tap group → ledgers list, add ledger FAB+sheet+save persists row, tap ledger → statement screen with month chips, add manual entry sheet opens, export sheet generates and shows download link, ledger menu (rename/move/merge/delete) opens, whatsapp screen send received bot reply, summary screen, settings screen, logout returns to PIN. Only minor non-blocking react-native-web deprecation warnings ('shadow*' style props → boxShadow, props.pointerEvents → style.pointerEvents).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "react-native-web shadow* props", "issue": "'shadow*' style props are deprecated. Use 'boxShadow' — surfaced on hero cards / sheets on web. Not a runtime error; migrate for future RN Web compat."},
+      {"component": "pointerEvents prop", "issue": "props.pointerEvents is deprecated. Use style.pointerEvents — reported on web preview; migrate to style.pointerEvents."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional cleanup) Migrate remaining shadow* style props to boxShadow and pointerEvents prop to style.pointerEvents to silence RN-Web deprecation warnings.",
+    "No functional fixes required — all requested backend & frontend flows verified working."
+  ],
+  "critical_code_review_comments": [
+    "server.py uses async correctly, excludes _id via Model.from_mongo/api mappers — clean.",
+    "Export endpoint returns proper info dict with url/filename/sent; public /api/files/{id} serves with correct Content-Disposition.",
+    "Webhook path handles whitelist + wa_message_id dedupe via db.wa_messages index — behavior confirmed.",
+    "Bot AI parser uses Gemini via EMERGENT_LLM_KEY; simulate p95 well under the 15s hint (~3-6s observed)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (created)",
+    "/app/test_reports/pytest/pytest_results.xml (generated)"
+  ],
+  "success_rate": {"backend": "100% (24/24)", "frontend": "100% (20/20 UI checkpoints)"},
+  "seed_data_creation": "During tests: created several TEST_ prefixed groups/ledgers/transactions plus one unique AI party TESTPARTY_xxxxxx (fuzzy match + credit + pdf export). Session-scoped test_group fixture soft-deletes its ledgers and group on teardown. Biki [Mill] and Mantu ledgers preserved (untouched).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend URL: https://whatsapp-munim.preview.emergentagent.com. PIN 3366. Owner 917205930002. Tests live at /app/backend/tests/backend_test.py — reuse; runs in ~40s. AI simulate calls are session-scoped to reuse a unique TESTPARTY_ ledger across tests (order matters). Provider is 'mock' by default → outbox writes; send_whatsapp:true returns sent:true. Statement uses opening_balance/closing_balance/rows[running_balance].",
+  "rca_of_issue": "N/A — no blocking bugs found."
+}

@@ -1,0 +1,158 @@
+{
+  "app_name": "Munsiji.app",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A quiet, highly readable, utility-focused mobile ledger that prioritizes clarity of numbers and instant trust through a clean iOS-native aesthetic.",
+  "color": {
+    "surface": "#FAFAFA",
+    "onSurface": "#18181B",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#18181B",
+    "surfaceTertiary": "#F4F4F5",
+    "onSurfaceTertiary": "#27272A",
+    "surfaceInverse": "#18181B",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#047857",
+    "brandPrimary": "#047857",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#D1FAE5",
+    "onBrandSecondary": "#065F46",
+    "brandTertiary": "#ECFDF5",
+    "onBrandTertiary": "#065F46",
+    "success": "#10B981",
+    "onSuccess": "#FFFFFF",
+    "warning": "#F59E0B",
+    "onWarning": "#FFFFFF",
+    "error": "#EF4444",
+    "onError": "#FFFFFF",
+    "info": "#71717A",
+    "onInfo": "#FFFFFF",
+    "border": "#E4E4E7",
+    "borderStrong": "#A1A1AA",
+    "divider": "#F4F4F5",
+    "muted": "#71717A",
+    "onBrand": "#FFFFFF"
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous vertical breathing room. Cards and list rows should feel comfortable, not cramped. Use subtle padding around groups.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "stack_only",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": "true",
+    "do's": [
+      "Use for sticky headers over scrolling ledger statements.",
+      "Use for the manual entry bottom sheet header."
+    ],
+    "dont's": [
+      "Do not use on individual transaction rows or dense data tables."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "PIN Login",
+      "purpose": "Secure entry to the app via a simple numpad.",
+      "states": {
+        "loading": "Centered spinner during verification.",
+        "empty": "N/A",
+        "error": "Shake animation and red 'Incorrect PIN' text."
+      },
+      "layout": "Centered logo and 'Enter PIN' prompt at the top, followed by a large, spacious numeric keypad filling the lower half. Minimalist and distraction-free."
+    },
+    {
+      "name": "Groups List",
+      "purpose": "High-level overview of ledger categories (Investment, Staff, etc.).",
+      "states": {
+        "loading": "Skeleton cards.",
+        "empty": "Illustration of an empty notebook with 'No groups created' and a CTA.",
+        "error": "Error message with 'Tap to retry'."
+      },
+      "layout": "Large, comfortable cards for each group showing total balance. Clean portfolio view layout. White cards on off-white background."
+    },
+    {
+      "name": "Ledgers List",
+      "purpose": "List of individual ledgers within a specific group, showing current balance.",
+      "states": {
+        "loading": "Skeleton list rows.",
+        "empty": "Illustration of an empty ledger with 'No ledgers found'.",
+        "error": "Error message with 'Retry'."
+      },
+      "layout": "Vertical list of ledgers. Each row has the ledger name on the left and the balance (in mono font) on the right. Green/Red text used for positive/negative balances."
+    },
+    {
+      "name": "Ledger Statement",
+      "purpose": "Tally-style transaction history for a single ledger with running balance.",
+      "states": {
+        "loading": "Skeleton table rows.",
+        "empty": "Empty state illustration with 'No transactions yet'.",
+        "error": "Error message with 'Retry'."
+      },
+      "layout": "Sticky header with overall balance and action buttons (Export, Edit, Add). Below is a flat, dense list (Tally-style table) showing Date, Description, Debit (Red), Credit (Green), and Running Balance. Use `divider` token between rows."
+    },
+    {
+      "name": "Settings",
+      "purpose": "Configure WhatsApp API key, whitelist numbers, and PIN.",
+      "states": {
+        "loading": "N/A",
+        "empty": "N/A",
+        "error": "Validation error text below inputs."
+      },
+      "layout": "Single-column form layout. Labels above inputs. Grouped sections for 'WhatsApp Configuration' and 'Security' in cards."
+    }
+  ],
+  "images": {
+    "empty_state_notebook": {
+      "url": "https://images.unsplash.com/photo-1695131020187-d3dcdab5016b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njl8MHwxfHNlYXJjaHwxfHxlbXB0eSUyMG5vdGVib29rJTIwcGFwZXIlMjBpbGx1c3RyYXRpb258ZW58MHx8fHwxNzg4ODkzMDM3fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "A piece of lined paper with red lines representing an empty ledger"
+    },
+    "app_logo_placeholder": {
+      "url": "https://images.unsplash.com/photo-1762831063505-68022b6133a9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MDZ8MHwxfHNlYXJjaHwxfHxtaW5pbWFsaXN0JTIwZmluYW5jZSUyMGxlZGdlciUyMGljb24lMjBwbmd8ZW58MHx8fHwxNzg4ODkzMDM3fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Desk with calculator, notebook, pencil representing finance and accounting"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Use 'Plus Jakarta Sans' for all text, and strictly use 'Space Grotesk' or 'JetBrains Mono' for all numeric values (balances, amounts) to ensure tabular alignment and a finance-first feel.",
+    "Follow the Tally-style convention for money states: Use the 'success' color (#10B981) for Credit (money in) and 'error' color (#EF4444) for Debit (money out). Keep the rest of the UI monochrome.",
+    "Implement the sticky primary CTA over scrolling content rule for the manual entry bottom sheet and forms.",
+    "For the Ledger Statement screen, implement a tabular layout using flex rows. Ensure the running balance column aligns to the right.",
+    "Use Phosphor icons with consistent weight (preferably filled for active/important, outlined for default).",
+    "Do NOT use indigo, blue, or purple anywhere in the app. Stick to the defined emerald/zinc palette.",
+    "Ensure all interactive targets are at least 44x44pt."
+  ]
+}

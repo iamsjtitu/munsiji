@@ -1,0 +1,106 @@
+from datetime import datetime, timezone
+from typing import Annotated, Any, List, Literal, Optional
+
+from bson import ObjectId
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+
+
+def _coerce_oid(v: Any) -> Any:
+    return str(v) if isinstance(v, ObjectId) else v
+
+
+PyObjectId = Annotated[str, BeforeValidator(_coerce_oid)]
+
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class BaseDocument(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+
+    def to_mongo(self) -> dict:
+        d = self.model_dump(by_alias=True, exclude_none=True)
+        d.pop("_id", None)
+        return d
+
+    @classmethod
+    def from_mongo(cls, doc: dict):
+        return cls.model_validate(doc)
+
+    def api(self) -> dict:
+        return self.model_dump(mode="json")
+
+
+class Group(BaseDocument):
+    name: str
+    created_at: datetime = Field(default_factory=now_utc)
+    deleted_at: Optional[datetime] = None
+
+
+class Ledger(BaseDocument):
+    name: str
+    normalized: str
+    group_id: PyObjectId
+    aliases: List[str] = []
+    current_balance: float = 0.0
+    created_at: datetime = Field(default_factory=now_utc)
+    deleted_at: Optional[datetime] = None
+
+
+Direction = Literal["debit", "credit"]
+
+
+class Transaction(BaseDocument):
+    ledger_id: PyObjectId
+    amount: float
+    direction: Direction
+    note: str = ""
+    entry_date: datetime
+    source: str = "app"  # whatsapp | app
+    wa_message_id: Optional[str] = None
+    sender: Optional[str] = None
+    created_at: datetime = Field(default_factory=now_utc)
+    updated_at: Optional[datetime] = None
+    deleted_at: Optional[datetime] = None
+
+
+class WaMessage(BaseDocument):
+    wa_message_id: Optional[str] = None
+    sender: str
+    text: str
+    reply: Optional[str] = None
+    status: str = "processed"  # processed | ignored | duplicate | clarify | error
+    source: str = "whatsapp"  # whatsapp | simulate
+    files: List[dict] = []
+    created_at: datetime = Field(default_factory=now_utc)
+
+
+class Settings(BaseDocument):
+    key: str = "main"
+    owner_number: str
+    pin_hash: str
+    provider: str = "mock"  # mock | wa9x
+    wa9x_base_url: str = ""
+    wa9x_api_key: str = ""
+    wa9x_instance_id: str = ""
+    wa9x_send_path: str = "/send-message"
+    wa9x_send_doc_path: str = "/send-media"
+    public_base_url: str = ""
+    updated_at: datetime = Field(default_factory=now_utc)
+
+
+class Pending(BaseDocument):
+    sender: str
+    kind: str  # confirm_match | choose_format | choose_ledger
+    question: str
+    payload: dict
+    created_at: datetime = Field(default_factory=now_utc)
+
+
+class ExportFile(BaseDocument):
+    filename: str
+    content_type: str
+    data: bytes
+    created_at: datetime = Field(default_factory=now_utc)
