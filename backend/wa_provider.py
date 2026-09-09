@@ -60,51 +60,89 @@ class MockProvider(WhatsAppProvider):
         return {"status": "mock_sent"}
 
 
+WA9X_DEFAULT_BASE = "https://wa.9x.design/api"
+
+
+def normalize_base_url(url: str) -> str:
+    """Accept https://wa.9x.design, .../api, .../api/v1/messages → always https://host/api."""
+    u = (url or "").strip().rstrip("/")
+    if not u:
+        return ""
+    if not re.match(r"^https?://", u):
+        u = "https://" + u
+    u = re.sub(r"/api(/v[12](/.*)?)?$", "/api", u)
+    if not u.endswith("/api"):
+        u += "/api"
+    return u
+
+
 class Wa9xProvider(WhatsAppProvider):
+    """wa.9x.design — Modern API v1 (JSON): POST /api/v1/messages with X-API-Key header.
+
+    Request: {"to": "919876543210", "text": "...", "media_url"?: str, "caption"?: str, "session_id"?: str}
+    Response: {"status": "sent", "message_id": "...", "to": "...", "error": null}
+    """
+
     name = "wa9x"
 
     def __init__(self, settings: Settings):
         self.s = settings
+        self.base = normalize_base_url(settings.wa9x_base_url) or WA9X_DEFAULT_BASE
 
     def _check(self):
-        if not self.s.wa9x_base_url or not self.s.wa9x_api_key:
-            raise ProviderNotConfigured("wa.9x base URL / API key set nahi hai")
+        if not self.s.wa9x_api_key:
+            raise ProviderNotConfigured("wa.9x API key set nahi hai (Settings → WhatsApp)")
 
     def _headers(self) -> dict:
         return {
+            "X-API-Key": self.s.wa9x_api_key,
             "Authorization": f"Bearer {self.s.wa9x_api_key}",
-            "apikey": self.s.wa9x_api_key,
             "Content-Type": "application/json",
+            "Accept": "application/json",
         }
 
-    async def _post(self, path: str, payload: dict) -> dict:
+    async def _send(self, payload: dict) -> dict:
         self._check()
-        url = self.s.wa9x_base_url.rstrip("/") + "/" + path.lstrip("/")
-        async with httpx.AsyncClient(timeout=20) as client:
+        if self.s.wa9x_instance_id:
+            payload["session_id"] = self.s.wa9x_instance_id
+        url = f"{self.base}/v1/messages"
+        async with httpx.AsyncClient(timeout=25) as client:
             r = await client.post(url, json=payload, headers=self._headers())
-            ok = 200 <= r.status_code < 300
-            await db.wa_outbox.insert_one(
-                {"to": payload.get("number"), "type": payload.get("type", "text"), "payload": payload, "status": "sent" if ok else "failed",
-                 "http_status": r.status_code, "response": r.text[:500], "created_at": now_utc()}
-            )
-            if not ok:
-                raise RuntimeError(f"wa.9x error {r.status_code}: {r.text[:200]}")
-            try:
-                return r.json()
-            except ValueError:
-                return {"raw": r.text}
+        try:
+            data = r.json() if r.text else {}
+        except ValueError:
+            data = {"raw": r.text[:300]}
+        status = str(data.get("status") or "").lower() if isinstance(data, dict) else ""
+        err = data.get("error") if isinstance(data, dict) else None
+        ok = 200 <= r.status_code < 300 and not err and (status in ("sent", "queued", "scheduled", "delivered", "") or data.get("success") is True)
+        await db.wa_outbox.insert_one(
+            {"to": payload.get("to"), "type": "document" if payload.get("media_url") else "text", "payload": {k: v for k, v in payload.items()},
+             "status": "sent" if ok else "failed", "http_status": r.status_code, "response": r.text[:500], "created_at": now_utc()}
+        )
+        if not ok:
+            detail = err or (data.get("detail") if isinstance(data, dict) else None) or r.text[:200]
+            raise RuntimeError(f"wa.9x {r.status_code}: {detail}")
+        return data
 
     async def send_text(self, to: str, text: str) -> dict:
-        payload = {"number": digits(to), "message": text, "type": "text"}
-        if self.s.wa9x_instance_id:
-            payload["instance_id"] = self.s.wa9x_instance_id
-        return await self._post(self.s.wa9x_send_path, payload)
+        return await self._send({"to": digits(to), "text": text})
 
     async def send_document(self, to: str, url: str, filename: str, caption: str = "") -> dict:
-        payload = {"number": digits(to), "media_url": url, "url": url, "filename": filename, "caption": caption, "type": "document", "message": caption}
-        if self.s.wa9x_instance_id:
-            payload["instance_id"] = self.s.wa9x_instance_id
-        return await self._post(self.s.wa9x_send_doc_path, payload)
+        return await self._send({"to": digits(to), "media_url": url, "caption": caption or filename, "text": caption or filename})
+
+    async def sessions(self) -> list:
+        """GET /api/v1/sessions → [{id, name, status, phone}] — used by the in-app connection check."""
+        self._check()
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(f"{self.base}/v1/sessions", headers=self._headers())
+        if r.status_code in (401, 403):
+            raise RuntimeError("wa.9x ne API key reject ki (401) — Settings mein sahi X-API-Key daalo (wa9x_... se shuru)")
+        if r.status_code >= 300:
+            raise RuntimeError(f"wa.9x {r.status_code}: {r.text[:200]}")
+        data = r.json()
+        if isinstance(data, dict):
+            data = data.get("sessions") or data.get("result") or data.get("data") or []
+        return data if isinstance(data, list) else []
 
 
 def get_provider(settings: Settings) -> WhatsAppProvider:
@@ -121,10 +159,14 @@ def _first(d: dict, keys, default=None):
     return default
 
 
-def parse_incoming(payload: Any) -> Optional[IncomingMessage]:
-    """Normalise many webhook shapes (wa.9x / Baileys-like / generic) into IncomingMessage."""
+def parse_incoming(payload: Any) -> tuple[Optional[IncomingMessage], str]:
+    """Normalise webhook shapes (wa.9x.design `message.received`, Baileys-like, generic) → (IncomingMessage | None, reason)."""
     if not isinstance(payload, dict):
-        return None
+        return None, "body JSON object nahi hai"
+    event = payload.get("event")
+    if isinstance(event, str) and event and "message" not in event.lower():
+        # e.g. wa.9x "Test" button / status events — reached us fine, just nothing to process
+        return None, f"event '{event}' (message nahi)"
     body = payload
     for wrapper in ("data", "message_data", "payload", "event"):
         if isinstance(body.get(wrapper), dict) and not _first(body, ["text", "message", "body"]):
@@ -132,7 +174,7 @@ def parse_incoming(payload: Any) -> Optional[IncomingMessage]:
     if isinstance(body.get("messages"), list) and body["messages"]:
         body = body["messages"][0]
     if body.get("fromMe") is True or body.get("from_me") is True or (isinstance(body.get("key"), dict) and body["key"].get("fromMe")):
-        return None
+        return None, "khud ka bheja message (fromMe)"
     sender = _first(body, ["from", "sender", "number", "phone", "remoteJid", "chatId", "chat_id", "waId", "wa_id", "author"])
     if isinstance(body.get("key"), dict) and not sender:
         sender = body["key"].get("remoteJid")
@@ -148,8 +190,10 @@ def parse_incoming(payload: Any) -> Optional[IncomingMessage]:
     mid = _first(body, ["id", "message_id", "messageId", "msg_id", "wa_message_id"])
     if isinstance(body.get("key"), dict) and not mid:
         mid = body["key"].get("id")
-    if not sender or not isinstance(text, str) or not text.strip():
-        return None
+    if not sender:
+        return None, "sender number nahi mila"
     if "@g.us" in str(sender):  # ignore groups
-        return None
-    return IncomingMessage(sender=digits(str(sender)), text=text.strip(), message_id=str(mid) if mid else None)
+        return None, "group message"
+    if not isinstance(text, str) or not text.strip():
+        return None, "text nahi hai (media/sticker?)" if body.get("has_media") or body.get("type") not in (None, "text", "chat") else "text khaali hai"
+    return IncomingMessage(sender=digits(str(sender)), text=text.strip(), message_id=str(mid) if mid else None), "ok"

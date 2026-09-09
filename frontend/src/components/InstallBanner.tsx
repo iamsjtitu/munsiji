@@ -3,6 +3,7 @@ import { Platform, Pressable, Text, View } from "react-native";
 import Animated, { FadeInDown, FadeOutUp } from "react-native-reanimated";
 
 import { Icon } from "@/src/components/Icon";
+import { useIsDesktop } from "@/src/hooks/useLayout";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 
@@ -44,6 +45,7 @@ function isIOS(): boolean {
 export function InstallBanner() {
   const styles = useStyles();
   const { colors } = useTheme();
+  const isDesktop = useIsDesktop();
   const [promptEvent, setPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [visible, setVisible] = useState(false);
   const [ios, setIos] = useState(false);
@@ -76,7 +78,7 @@ export function InstallBanner() {
     };
   }, []);
 
-  if (Platform.OS !== "web" || !visible) return null;
+  if (Platform.OS !== "web" || !visible || isDesktop) return null;
 
   const dismiss = () => {
     setVisible(false);

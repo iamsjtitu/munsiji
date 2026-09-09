@@ -1,15 +1,19 @@
+import hashlib
+import hmac
+import json
 import logging
 import os
 import re
 import secrets
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from bson import ObjectId
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from pymongo.errors import DuplicateKeyError
 from starlette.middleware.cors import CORSMiddleware
 
 from pathlib import Path
@@ -33,7 +37,7 @@ from ledger_service import (  # noqa: E402
     statement,
 )
 from models import Group, Ledger, Settings, Transaction, WaMessage, now_utc  # noqa: E402
-from wa_provider import ProviderNotConfigured, get_provider, parse_incoming  # noqa: E402
+from wa_provider import ProviderNotConfigured, Wa9xProvider, get_provider, parse_incoming, same_number  # noqa: E402
 import system  # noqa: E402
 from emailer import send_alert  # noqa: E402
 import asyncio  # noqa: E402
@@ -55,6 +59,9 @@ async def startup():
     await db.export_files.create_index("token", unique=True, sparse=True)
     await db.export_files.create_index("expires_at", expireAfterSeconds=0)
     await db.login_guard.create_index("key", unique=True)
+    await db.wa_webhook_log.create_index("received_at", expireAfterSeconds=7 * 24 * 3600)
+    await db.wa_seen.create_index("message_id", unique=True)
+    await db.wa_seen.create_index("created_at", expireAfterSeconds=3 * 24 * 3600)
     if not await db.settings.find_one({"key": "main"}):
         s = Settings(owner_number=os.environ["OWNER_WHATSAPP"], pin_hash=hash_pin(os.environ["OWNER_PIN"]), owner_email=os.environ.get("OWNER_EMAIL", ""),
                      webhook_secret=secrets.token_urlsafe(24))
@@ -157,6 +164,10 @@ def _webhook_token(request: Request) -> str:
     return request.query_params.get("token") or request.headers.get("x-webhook-token") or ""
 
 
+def wa_configured(s: Settings) -> bool:
+    return bool(s.wa9x_api_key)
+
+
 async def _require_webhook_token(request: Request) -> Settings:
     s = await get_settings()
     if not s.webhook_secret or not secrets.compare_digest(_webhook_token(request), s.webhook_secret):
@@ -164,31 +175,84 @@ async def _require_webhook_token(request: Request) -> Settings:
     return s
 
 
-@api.post("/whatsapp/webhook")
-async def whatsapp_webhook(request: Request):
-    settings = await _require_webhook_token(request)
+async def _webhook_log(outcome: str, detail: str = "", payload=None, sender: str = "", text: str = "", event: str = "") -> ObjectId:
+    """Every webhook hit (even rejected ones) is recorded so the owner can see from the app whether wa.9x reaches us."""
+    raw = ""
+    if payload is not None:
+        try:
+            raw = json.dumps(payload, ensure_ascii=False)[:1500]
+        except (TypeError, ValueError):
+            raw = str(payload)[:1500]
+    doc = {"received_at": now_utc(), "outcome": outcome, "detail": detail[:300], "sender": sender, "text": (text or "")[:200], "event": event, "raw": raw}
+    res = await db.wa_webhook_log.insert_one(doc)
+    return res.inserted_id
+
+
+def _verify_wa9x_signature(s: Settings, request: Request, body: bytes) -> bool:
+    """Optional HMAC check (wa.9x → Settings → webhook signing secret). Skipped when no secret is saved."""
+    if not s.wa9x_webhook_secret:
+        return True
+    sig = request.headers.get("x-wa9x-signature") or request.headers.get("x-wapihub-signature") or ""
+    expected = "sha256=" + hmac.new(s.wa9x_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig.strip(), expected)
+
+
+async def _process_incoming(settings: Settings, sender: str, text: str, message_id: Optional[str], log_id: ObjectId):
+    """Runs after the 200 is returned (wa.9x waits max 10s) — AI parse + reply via provider."""
+    outcome, detail = "error", ""
     try:
-        payload = await request.json()
-    except Exception:  # noqa: BLE001
+        result = await handle_message(sender, text, message_id, source="whatsapp")
+        outcome = result["status"]
+        if result["reply"]:
+            provider = get_provider(settings)
+            try:
+                await provider.send_text(sender, result["reply"])
+                for f in result["files"]:
+                    await provider.send_document(sender, f["url"], f["filename"], caption=f["filename"])
+            except (ProviderNotConfigured, Exception) as e:  # noqa: BLE001
+                logger.error("send failed: %s", e)
+                await db.wa_messages.update_many({"wa_message_id": message_id} if message_id else {"sender": sender, "text": text},
+                                                 {"$set": {"status": "send_failed", "send_error": str(e)[:300]}})
+                outcome, detail = "send_failed", str(e)[:300]
+                await send_alert("wa_send_failed", "WhatsApp reply nahi gaya (wa.9x)", [f"Error: {str(e)[:160]}", f"Message: {text[:120]}", "Entry save ho gayi hai; sirf reply nahi gaya. Settings mein wa.9x config check karo ya app se kaam karo."])
+    except Exception as e:  # noqa: BLE001
+        logger.exception("webhook processing failed")
+        detail = str(e)[:300]
+    await db.wa_webhook_log.update_one({"_id": log_id}, {"$set": {"outcome": outcome, "detail": detail, "processed_at": now_utc()}})
+
+
+@api.post("/whatsapp/webhook")
+async def whatsapp_webhook(request: Request, background: BackgroundTasks):
+    s = await get_settings()
+    body = await request.body()
+    try:
+        payload = json.loads(body) if body else {}
+    except ValueError:
         form = await request.form()
         payload = dict(form)
-    msg = parse_incoming(payload)
+    event = str(payload.get("event") or "") if isinstance(payload, dict) else ""
+    if not s.webhook_secret or not secrets.compare_digest(_webhook_token(request), s.webhook_secret):
+        await _webhook_log("invalid_token", "Webhook URL ka ?token= galat/missing hai — Settings se poora URL copy karke wa.9x mein daalo", payload, event=event)
+        raise HTTPException(status_code=401, detail="Invalid webhook token")
+    if not _verify_wa9x_signature(s, request, body):
+        await _webhook_log("bad_signature", "X-Wa9x-Signature match nahi hua — Settings mein webhook signing secret check karo", payload, event=event)
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    msg, reason = parse_incoming(payload)
     if not msg:
-        return {"status": "ignored", "reason": "no text message"}
-    result = await handle_message(msg.sender, msg.text, msg.message_id, source="whatsapp")
-    if result["reply"]:
-        provider = get_provider(settings)
+        await _webhook_log("ignored", reason, payload, event=event)
+        return {"status": "ignored", "reason": reason}
+    if not same_number(msg.sender, s.owner_number):
+        await _webhook_log("not_owner", f"Sender {msg.sender} whitelist ({s.owner_number}) se match nahi karta", payload, sender=msg.sender, text=msg.text, event=event)
+        return {"status": "ignored", "reason": "not owner"}
+    if msg.message_id:
         try:
-            await provider.send_text(msg.sender, result["reply"])
-            for f in result["files"]:
-                await provider.send_document(msg.sender, f["url"], f["filename"], caption=f["filename"])
-        except (ProviderNotConfigured, Exception) as e:  # noqa: BLE001
-            logger.error("send failed: %s", e)
-            await db.wa_messages.update_many({"wa_message_id": msg.message_id} if msg.message_id else {"sender": msg.sender, "text": msg.text},
-                                             {"$set": {"status": "send_failed", "send_error": str(e)[:300]}})
-            result["status"] = "send_failed"
-            await send_alert("wa_send_failed", "WhatsApp reply nahi gaya (wa.9x)", [f"Error: {str(e)[:160]}", f"Message: {msg.text[:120]}", "Entry save ho gayi hai; sirf reply nahi gaya. Settings mein wa.9x config check karo ya app se kaam karo."])
-    return {"status": result["status"]}
+            await db.wa_seen.insert_one({"message_id": msg.message_id, "created_at": now_utc()})
+        except DuplicateKeyError:
+            await _webhook_log("duplicate", "Same message_id dobara aaya (wa.9x retry) — skip", payload, sender=msg.sender, text=msg.text, event=event)
+            return {"status": "duplicate"}
+    log_id = await _webhook_log("accepted", "Processing…", payload, sender=msg.sender, text=msg.text, event=event)
+    background.add_task(_process_incoming, s, msg.sender, msg.text, msg.message_id, log_id)
+    return {"status": "accepted"}
 
 
 @api.get("/whatsapp/webhook")
@@ -521,8 +585,7 @@ class SettingsPatch(BaseModel):
     wa9x_base_url: Optional[str] = None
     wa9x_api_key: Optional[str] = None
     wa9x_instance_id: Optional[str] = None
-    wa9x_send_path: Optional[str] = None
-    wa9x_send_doc_path: Optional[str] = None
+    wa9x_webhook_secret: Optional[str] = None
     public_base_url: Optional[str] = None
 
 
@@ -531,7 +594,7 @@ class PinChange(BaseModel):
     new_pin: str = Field(pattern=r"^\d{4,8}$")
 
 
-SECRET_FIELDS = ("emergent_llm_key", "emergent_email_key", "wa9x_api_key")
+SECRET_FIELDS = ("emergent_llm_key", "emergent_email_key", "wa9x_api_key", "wa9x_webhook_secret")
 
 
 def webhook_url(s: Settings) -> str:
@@ -549,7 +612,7 @@ def settings_api(s: Settings) -> dict:
     d["ai_configured"] = bool(s.emergent_llm_key or os.environ.get("EMERGENT_LLM_KEY"))
     d["email_configured"] = bool((s.emergent_email_key or os.environ.get("EMERGENT_EMAIL_KEY")) and s.owner_email)
     d["webhook_url"] = webhook_url(s)
-    d["configured"] = bool(s.wa9x_base_url and s.wa9x_api_key)
+    d["configured"] = wa_configured(s)
     return d
 
 
@@ -632,14 +695,58 @@ async def wa_messages(limit: int = 50):
     return [WaMessage.from_mongo(d).api() for d in docs][::-1]
 
 
+def _iso(v):
+    return v.isoformat() if hasattr(v, "isoformat") else v
+
+
 @protected.get("/whatsapp/status")
 async def wa_status():
     s = await get_settings()
     pending = await db.pending.find_one({})
     last = await db.wa_messages.find_one({"source": "whatsapp"}, sort=[("created_at", -1)])
-    return {"provider": s.provider, "configured": bool(s.wa9x_base_url and s.wa9x_api_key), "owner_number": s.owner_number,
+    last_hook = await db.wa_webhook_log.find_one({}, sort=[("received_at", -1)])
+    since = now_utc() - timedelta(hours=24)
+    hits_24h = await db.wa_webhook_log.count_documents({"received_at": {"$gte": since}})
+    return {"provider": s.provider, "configured": wa_configured(s), "owner_number": s.owner_number,
             "webhook_url": webhook_url(s), "pending_question": pending["question"] if pending else None,
-            "last_whatsapp_at": last["created_at"].isoformat() if last else None}
+            "last_whatsapp_at": _iso(last["created_at"]) if last else None,
+            "last_webhook_at": _iso(last_hook["received_at"]) if last_hook else None,
+            "last_webhook_outcome": last_hook["outcome"] if last_hook else None,
+            "webhook_hits_24h": hits_24h}
+
+
+@protected.get("/whatsapp/webhook-log")
+async def wa_webhook_log(limit: int = 20):
+    limit = max(1, min(limit, 100))
+    docs = await db.wa_webhook_log.find({}).sort("received_at", -1).limit(limit).to_list(limit)
+    out = []
+    for d in docs:
+        out.append({"id": str(d["_id"]), "received_at": _iso(d["received_at"]), "processed_at": _iso(d.get("processed_at")), "outcome": d["outcome"],
+                    "detail": d.get("detail", ""), "sender": d.get("sender", ""), "text": d.get("text", ""), "event": d.get("event", ""), "raw": d.get("raw", "")})
+    return out
+
+
+@protected.post("/whatsapp/check-connection")
+async def wa_check_connection():
+    """Owner-triggered diagnostics: list wa.9x sessions + send a test WhatsApp to the owner number."""
+    s = await get_settings()
+    if s.provider != "wa9x":
+        raise HTTPException(400, "Provider 'wa.9x live' select karo aur Save karo, phir test karo")
+    if not wa_configured(s):
+        raise HTTPException(400, "wa.9x API key set nahi hai — Settings → WhatsApp mein daalo")
+    p = Wa9xProvider(s)
+    out: dict = {"base_url": p.base, "sessions": [], "sessions_error": None, "sent": False, "send_error": None}
+    try:
+        sess = await p.sessions()
+        out["sessions"] = [{"name": x.get("name"), "status": x.get("status"), "phone": x.get("phone") or x.get("number"), "id": x.get("id")} for x in sess if isinstance(x, dict)]
+    except Exception as e:  # noqa: BLE001
+        out["sessions_error"] = str(e)[:300]
+    try:
+        await p.send_text(s.owner_number, "✅ Munsiji connected! Ab yahan hisab likho — e.g. \"Biki mill ko 5000 diya\"")
+        out["sent"] = True
+    except Exception as e:  # noqa: BLE001
+        out["send_error"] = str(e)[:300]
+    return out
 
 
 @protected.delete("/whatsapp/pending")

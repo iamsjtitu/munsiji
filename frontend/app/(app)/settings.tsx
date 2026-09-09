@@ -6,10 +6,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { Header } from "@/src/components/Header";
+import { Header, useHeaderButtonStyle } from "@/src/components/Header";
 import { Button, Card, Field, Segmented } from "@/src/components/ui";
 import { useRequestUpdate, useUpdateDoneWatcher, useVersion } from "@/src/components/UpdateBanner";
 import { formatDate } from "@/src/format";
+import { DESKTOP_PAD, useIsDesktop } from "@/src/hooks/useLayout";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
 import { UPDATE_BUSY_STATES, type Settings } from "@/src/types";
@@ -18,6 +19,8 @@ const useStyles = makeStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.surface },
   section: { fontFamily: fonts.text, fontSize: 13, fontWeight: "700", color: colors.muted, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8, marginTop: 8 },
   card: { padding: 16, marginBottom: 16 },
+  columns: { flexDirection: "row", gap: 24, alignItems: "flex-start" },
+  col: { flex: 1 },
   hint: { fontFamily: fonts.text, fontSize: 12, color: colors.muted, lineHeight: 17, marginBottom: 12 },
   code: { fontFamily: fonts.mono, fontSize: 12, color: colors.onSurface, backgroundColor: colors.surfaceTertiary, padding: 10, borderRadius: 8, marginBottom: 12 },
   sticky: { padding: 16, backgroundColor: colors.surfaceSecondary, borderTopWidth: 1, borderTopColor: colors.border },
@@ -145,6 +148,8 @@ export default function SettingsScreen() {
   const qc = useQueryClient();
   const toast = useToast();
   const { logout } = useAuth();
+  const isDesktop = useIsDesktop();
+  const headerBtn = useHeaderButtonStyle();
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => api.get<Settings>("/settings") });
 
   const [form, setForm] = useState<Partial<Settings>>({});
@@ -153,6 +158,7 @@ export default function SettingsScreen() {
   const [llmKey, setLlmKey] = useState("");
   const [emailKey, setEmailKey] = useState("");
   const [waKey, setWaKey] = useState("");
+  const [waSecret, setWaSecret] = useState("");
 
   useEffect(() => {
     if (settings.data) setForm(settings.data);
@@ -173,9 +179,11 @@ export default function SettingsScreen() {
         email_configured: _g,
         has_wa9x_api_key: _h,
         wa9x_api_key_hint: _i,
+        has_wa9x_webhook_secret: _j,
+        wa9x_webhook_secret_hint: _k,
         ...body
       } = form as Settings;
-      return api.put<Settings>("/settings", { ...body, emergent_llm_key: llmKey.trim(), emergent_email_key: emailKey.trim(), wa9x_api_key: waKey.trim() });
+      return api.put<Settings>("/settings", { ...body, emergent_llm_key: llmKey.trim(), emergent_email_key: emailKey.trim(), wa9x_api_key: waKey.trim(), wa9x_webhook_secret: waSecret.trim() });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
@@ -183,6 +191,7 @@ export default function SettingsScreen() {
       setLlmKey("");
       setEmailKey("");
       setWaKey("");
+      setWaSecret("");
       toast.show("Settings save ho gayi", "success");
     },
     onError: (e: Error) => toast.show(e.message, "error"),
@@ -215,11 +224,11 @@ export default function SettingsScreen() {
     onError: (e: Error) => toast.show(e.message, "error"),
   });
 
-  return (
-    <View style={styles.root} testID="settings-screen">
-      <Header title="Settings" />
-      <KeyboardAwareScrollView bottomOffset={96} contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 96 }} keyboardShouldPersistTaps="handled">
-        <Text style={styles.section}>WhatsApp (wa.9x)</Text>
+  const saveBtn = <Button testID="settings-save-button" title="Save Settings" icon="check" onPress={() => save.mutate()} loading={save.isPending} style={isDesktop ? headerBtn : undefined} />;
+
+  const waCard = (
+    <>
+        <Text style={styles.section}>WhatsApp (wa.9x.design)</Text>
         <Card style={styles.card}>
           <Text style={styles.hint}>Provider mode. Mock mode mein bot replies sirf app mein dikhenge (test ke liye). wa.9x mode mein real WhatsApp pe jayenge.</Text>
           <View style={{ marginBottom: 16 }}>
@@ -233,27 +242,49 @@ export default function SettingsScreen() {
               ]}
             />
           </View>
-          <Field testID="settings-base-url" label="wa.9x Base URL" value={form.wa9x_base_url ?? ""} onChangeText={set("wa9x_base_url")} placeholder="https://api.wa9x.example" autoCapitalize="none" keyboardType="url" />
           <Field
             testID="settings-api-key"
-            label={`wa.9x API Key ${form.has_wa9x_api_key ? `· saved ${form.wa9x_api_key_hint}` : "· NOT SET"}`}
+            label={`wa.9x API Key (X-API-Key) ${form.has_wa9x_api_key ? `· saved ${form.wa9x_api_key_hint}` : "· NOT SET"}`}
             value={waKey}
             onChangeText={setWaKey}
-            placeholder={form.has_wa9x_api_key ? "Nayi key daalne ke liye type karo (hatane ke liye -)" : "API key"}
+            placeholder={form.has_wa9x_api_key ? "Nayi key daalne ke liye type karo (hatane ke liye -)" : "wa9x_..."}
             autoCapitalize="none"
             secureTextEntry
           />
-          <Field testID="settings-instance-id" label="Instance ID (optional)" value={form.wa9x_instance_id ?? ""} onChangeText={set("wa9x_instance_id")} placeholder="instance id" autoCapitalize="none" />
-          <Field testID="settings-send-path" label="Send text path" value={form.wa9x_send_path ?? ""} onChangeText={set("wa9x_send_path")} placeholder="/send-message" autoCapitalize="none" />
-          <Field testID="settings-send-doc-path" label="Send document path" value={form.wa9x_send_doc_path ?? ""} onChangeText={set("wa9x_send_doc_path")} placeholder="/send-media" autoCapitalize="none" />
-          <Text style={styles.hint}>Webhook URL — wa.9x dashboard mein incoming message webhook yahan point karo. Isme secret token hai: kisi se share na karo. Bina sahi token wale requests reject hote hain.</Text>
+          <Text style={styles.hint}>wa.9x dashboard → Sessions → &quot;Get my API keys&quot; se copy karo (wa9x_ se shuru hoti hai).</Text>
+          <Field testID="settings-base-url" label="API Base URL (khaali = https://wa.9x.design/api)" value={form.wa9x_base_url ?? ""} onChangeText={set("wa9x_base_url")} placeholder="https://wa.9x.design/api" autoCapitalize="none" keyboardType="url" />
+          <Field testID="settings-instance-id" label="Session ID (optional — sirf tab jab wa.9x mein 2+ numbers linked ho)" value={form.wa9x_instance_id ?? ""} onChangeText={set("wa9x_instance_id")} placeholder="session id" autoCapitalize="none" />
+          <Text style={styles.hint}>
+            Webhook URL — wa.9x dashboard → Settings → Inbound Webhook mein ye poora URL paste karo (token ke saath). Session settings mein &quot;Receive Messages&quot; ON rakho. Isme secret token hai: kisi se share na karo.
+          </Text>
           <Text selectable style={styles.code} testID="settings-webhook-url">
             {settings.data?.webhook_url ?? "..."}
           </Text>
           <Button testID="settings-rotate-webhook-button" title="Naya webhook token banao" variant="secondary" icon="refresh-cw" onPress={() => rotateWebhook.mutate()} loading={rotateWebhook.isPending} style={{ marginBottom: 16 }} />
-          <Field testID="settings-public-url" label="Public base URL (files ke liye)" value={form.public_base_url ?? ""} onChangeText={set("public_base_url")} placeholder="https://your-app.emergent.host" autoCapitalize="none" keyboardType="url" />
+          <Field
+            testID="settings-webhook-secret"
+            label={`wa.9x webhook signing secret (optional) ${form.has_wa9x_webhook_secret ? `· saved ${form.wa9x_webhook_secret_hint}` : ""}`}
+            value={waSecret}
+            onChangeText={setWaSecret}
+            placeholder={form.has_wa9x_webhook_secret ? "Naya secret daalne ke liye type karo (hatane ke liye -)" : "wa.9x Settings → webhook signing secret"}
+            autoCapitalize="none"
+            secureTextEntry
+          />
+          <Text style={styles.hint}>Set karne pe har webhook ka X-Wa9x-Signature verify hota hai (extra security). Galat secret = messages reject.</Text>
+          <Field testID="settings-public-url" label="Public base URL (files ke liye)" value={form.public_base_url ?? ""} onChangeText={set("public_base_url")} placeholder="https://munsiji.app" autoCapitalize="none" keyboardType="url" />
+          <Text style={styles.hint}>Note: wa.9x se linked number = bot. Apne owner number (neeche Whitelist) se us bot number ko message karo — khud ko message karne pe webhook nahi aata.</Text>
         </Card>
 
+        <Text style={styles.section}>Whitelist</Text>
+        <Card style={styles.card}>
+          <Text style={styles.hint}>Sirf is number ke messages process honge (country code ke saath, e.g. 917205930002).</Text>
+          <Field testID="settings-owner-number" label="Owner WhatsApp number" value={form.owner_number ?? ""} onChangeText={set("owner_number")} keyboardType="phone-pad" mono />
+        </Card>
+    </>
+  );
+
+  const otherCards = (
+    <>
         <Text style={styles.section}>Emergent Keys (AI & Email)</Text>
         <Card style={styles.card} testID="keys-card">
           <Text style={styles.hint}>
@@ -290,12 +321,6 @@ export default function SettingsScreen() {
           <Button testID="settings-test-email-button" title="Test email bhejo" variant="secondary" icon="send" onPress={() => testEmail.mutate()} loading={testEmail.isPending} disabled={!form.owner_email} />
         </Card>
 
-        <Text style={styles.section}>Whitelist</Text>
-        <Card style={styles.card}>
-          <Text style={styles.hint}>Sirf is number ke messages process honge (country code ke saath, e.g. 917205930002).</Text>
-          <Field testID="settings-owner-number" label="Owner WhatsApp number" value={form.owner_number ?? ""} onChangeText={set("owner_number")} keyboardType="phone-pad" mono />
-        </Card>
-
         <Text style={styles.section}>Security</Text>
         <Card style={styles.card}>
           <Field testID="settings-old-pin" label="Purana PIN" value={oldPin} onChangeText={setOldPin} keyboardType="number-pad" secureTextEntry maxLength={8} mono />
@@ -307,14 +332,31 @@ export default function SettingsScreen() {
         <Text style={styles.section}>Server & Updates</Text>
         <UpdatesCard />
         <ServerCard />
+    </>
+  );
 
-        <Button testID="settings-logout-button" title="Logout" variant="ghost" icon="log-out" onPress={() => void logout()} />
+  return (
+    <View style={styles.root} testID="settings-screen">
+      <Header title="Settings" back={!isDesktop} subtitle={isDesktop ? "WhatsApp, AI keys, alerts, security aur server" : undefined} right={isDesktop ? saveBtn : null} />
+      <KeyboardAwareScrollView bottomOffset={96} contentContainerStyle={{ padding: isDesktop ? DESKTOP_PAD : 16, paddingBottom: insets.bottom + 96 }} keyboardShouldPersistTaps="handled">
+        {isDesktop ? (
+          <View style={styles.columns}>
+            <View style={styles.col}>{waCard}</View>
+            <View style={styles.col}>{otherCards}</View>
+          </View>
+        ) : (
+          <>
+            {waCard}
+            {otherCards}
+            <Button testID="settings-logout-button" title="Logout" variant="ghost" icon="log-out" onPress={() => void logout()} />
+          </>
+        )}
       </KeyboardAwareScrollView>
-      <KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
-        <View style={[styles.sticky, { paddingBottom: insets.bottom + 12 }]}>
-          <Button testID="settings-save-button" title="Save Settings" icon="check" onPress={() => save.mutate()} loading={save.isPending} />
-        </View>
-      </KeyboardStickyView>
+      {!isDesktop ? (
+        <KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
+          <View style={[styles.sticky, { paddingBottom: insets.bottom + 12 }]}>{saveBtn}</View>
+        </KeyboardStickyView>
+      ) : null}
     </View>
   );
 }

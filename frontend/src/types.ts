@@ -62,14 +62,46 @@ export type Settings = {
   email_configured: boolean;
   has_wa9x_api_key: boolean;
   wa9x_api_key_hint: string;
+  has_wa9x_webhook_secret: boolean;
+  wa9x_webhook_secret_hint: string;
   provider: "mock" | "wa9x";
   wa9x_base_url: string;
   wa9x_instance_id: string;
-  wa9x_send_path: string;
-  wa9x_send_doc_path: string;
   public_base_url: string;
   webhook_url: string;
   configured: boolean;
+};
+
+export type WaStatus = {
+  provider: string;
+  configured: boolean;
+  owner_number: string;
+  webhook_url: string;
+  pending_question: string | null;
+  last_whatsapp_at: string | null;
+  last_webhook_at: string | null;
+  last_webhook_outcome: string | null;
+  webhook_hits_24h: number;
+};
+
+export type WebhookLogEntry = {
+  id: string;
+  received_at: string;
+  processed_at: string | null;
+  outcome: string;
+  detail: string;
+  sender: string;
+  text: string;
+  event: string;
+  raw: string;
+};
+
+export type ConnectionCheck = {
+  base_url: string;
+  sessions: { name?: string; status?: string; phone?: string; id?: string }[];
+  sessions_error: string | null;
+  sent: boolean;
+  send_error: string | null;
 };
 
 export type Dashboard = {

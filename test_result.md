@@ -101,3 +101,34 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+## Iteration 6 (main agent) — wa.9x.design real API + webhook diagnostics + desktop web layout
+backend:
+  - task: "wa.9x.design provider (POST /api/v1/messages, X-API-Key) + base URL normalisation"
+    implemented: true
+    working: "NA"
+    file: "backend/wa_provider.py"
+    needs_retesting: true
+  - task: "Webhook: token + optional HMAC, every hit logged in wa_webhook_log, dedupe via wa_seen, 200 fast + BackgroundTasks processing"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    needs_retesting: true
+  - task: "GET /api/whatsapp/webhook-log, POST /api/whatsapp/check-connection, /whatsapp/status extra fields, settings wa9x_webhook_secret (write-only), send_path fields removed"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    needs_retesting: true
+frontend:
+  - task: "Desktop layout (>=960px): sidebar, Dashboard stat tiles, header action buttons, 2-col Settings/Summary, PIN keyboard typing"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/(app)/*.tsx, frontend/src/components/{Header,Sidebar,StatTile}.tsx"
+    needs_retesting: true
+  - task: "WhatsApp diagnostics sheet (wa-diagnostics-button) + Settings WhatsApp card (API key, webhook secret)"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/components/WaDiagnostics.tsx, frontend/app/(app)/settings.tsx"
+    needs_retesting: true
+agent_communication:
+  - agent: "main"
+    message: "Test backend webhook flow with the real wa.9x payload shape {event:'message.received',from,text,message_id}; webhook must answer 200 within ~1s with status 'accepted', second identical message_id → 'duplicate', non-owner → 'ignored', wrong token → 401 (all logged in GET /api/whatsapp/webhook-log). Frontend: test at 1440px (desktop shell) AND 390px (mobile) — both must work."

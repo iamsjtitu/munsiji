@@ -226,9 +226,16 @@ def test_get_and_put_settings(auth):
 
 
 def test_change_pin_same_value(auth):
-    # Change PIN to same 3366 — should be accepted
+    # Change PIN to same 3366 — should be accepted. NOTE: this revokes all existing JWTs
+    # (backend uses pin_changed_at). We re-login and update the shared auth dict so downstream
+    # tests keep working when this file is run standalone.
     r = SESSION.put(f"{API}/settings/pin", json={"old_pin": PIN, "new_pin": PIN}, headers=auth, timeout=15)
     assert r.status_code == 200
+    # refresh token in-place
+    time.sleep(1.1)  # ensure new iat > pin_changed_at
+    r2 = SESSION.post(f"{API}/auth/login", json={"pin": PIN}, timeout=15)
+    assert r2.status_code == 200
+    auth["Authorization"] = f"Bearer {r2.json()['access_token']}"
 
 
 # ---------------------------------------------------- whatsapp simulate (AI, slow)

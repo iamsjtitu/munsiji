@@ -108,7 +108,7 @@ export const themes: { light: ThemeColors; dark?: ThemeColors } = { light };
 // follow the device. Every useTheme() consumer re-renders. Persisting the
 // choice and re-applying it on launch is the toggle's job.
 export function setColorScheme(scheme: ColorScheme | null) {
-  Appearance.setColorScheme?.(scheme);
+  Appearance.setColorScheme?.(scheme ?? "unspecified");
 }
 
 // Keep native surfaces (alerts, pickers, navigation chrome) on the schemes this
@@ -118,7 +118,7 @@ setColorScheme?.(themes.dark ? null : defaultScheme);
 
 export function useTheme(): { scheme: ColorScheme; colors: ThemeColors } {
   const system = useColorScheme();
-  const scheme: ColorScheme = system && themes[system] ? system : defaultScheme;
+  const scheme: ColorScheme = (system === "light" || system === "dark") && themes[system] ? system : defaultScheme;
   return { scheme, colors: themes[scheme] ?? themes.light };
 }
 

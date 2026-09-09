@@ -5,15 +5,15 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
-import { Header } from "@/src/components/Header";
+import { Header, HeaderButton } from "@/src/components/Header";
 import { Icon } from "@/src/components/Icon";
 import { EmptyState } from "@/src/components/ui";
+import { WaDiagnosticsSheet } from "@/src/components/WaDiagnostics";
 import { formatDate } from "@/src/format";
+import { DESKTOP_PAD, useIsDesktop } from "@/src/hooks/useLayout";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
-import type { WaMessage } from "@/src/types";
-
-type Status = { provider: string; configured: boolean; owner_number: string; pending_question: string | null };
+import type { WaMessage, WaStatus } from "@/src/types";
 
 const useStyles = makeStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.surface },
@@ -24,6 +24,7 @@ const useStyles = makeStyles((colors) => ({
   list: { padding: 16, gap: 10 },
   bubbleIn: { alignSelf: "flex-end", maxWidth: "82%", backgroundColor: colors.brandSecondary, borderRadius: 16, borderBottomRightRadius: 4, paddingHorizontal: 14, paddingVertical: 10 },
   bubbleOut: { alignSelf: "flex-start", maxWidth: "88%", backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, borderRadius: 16, borderBottomLeftRadius: 4, paddingHorizontal: 14, paddingVertical: 10 },
+  bubbleDesk: { maxWidth: "65%" },
   inText: { fontFamily: fonts.text, fontSize: 15, color: colors.onBrandSecondary, lineHeight: 21 },
   outText: { fontFamily: fonts.text, fontSize: 15, color: colors.onSurface, lineHeight: 21 },
   meta: { fontFamily: fonts.text, fontSize: 10, color: colors.muted, marginTop: 4 },
@@ -41,11 +42,13 @@ export default function WhatsAppScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const toast = useToast();
+  const isDesktop = useIsDesktop();
   const [text, setText] = useState("");
+  const [diagOpen, setDiagOpen] = useState(false);
   const scroll = useRef<ScrollView>(null);
 
   const messages = useQuery({ queryKey: ["wa-messages"], queryFn: () => api.get<WaMessage[]>("/whatsapp/messages?limit=60"), refetchInterval: 8000 });
-  const status = useQuery({ queryKey: ["wa-status"], queryFn: () => api.get<Status>("/whatsapp/status"), refetchInterval: 15000 });
+  const status = useQuery({ queryKey: ["wa-status"], queryFn: () => api.get<WaStatus>("/whatsapp/status"), refetchInterval: 15000 });
 
   const send = useMutation({
     mutationFn: (t: string) => api.post<{ reply: string | null; status: string }>("/whatsapp/simulate", { text: t }),
@@ -73,21 +76,33 @@ export default function WhatsAppScreen() {
   };
 
   const s = status.data;
+  const live = s?.provider === "wa9x";
+  const liveOk = live && s?.configured;
 
   return (
     <View style={styles.root} testID="whatsapp-screen">
-      <Header title="WhatsApp Munim" subtitle={s ? `${s.provider === "wa9x" ? "wa.9x" : "Mock mode"} · ${s.owner_number}` : undefined} />
+      <Header
+        title="WhatsApp Munim"
+        subtitle={s ? `${live ? "wa.9x live" : "Mock mode"} · ${s.owner_number}` : undefined}
+        back={!isDesktop}
+        right={<HeaderButton icon="activity" testID="wa-diagnostics-button" onPress={() => setDiagOpen(true)} />}
+      />
       <KeyboardAvoidingView behavior="translate-with-padding" style={{ flex: 1 }} keyboardVerticalOffset={0}>
-        <ScrollView ref={scroll} contentContainerStyle={styles.list} keyboardShouldPersistTaps="handled" testID="wa-message-list">
+        <ScrollView ref={scroll} contentContainerStyle={[styles.list, isDesktop && { padding: DESKTOP_PAD }]} keyboardShouldPersistTaps="handled" testID="wa-message-list">
           {s ? (
-            <View style={[styles.banner, s.provider === "wa9x" && s.configured ? styles.bannerOk : styles.bannerWarn]} testID="wa-status-banner">
-              <Icon name={s.provider === "wa9x" && s.configured ? "check" : "info"} size={16} color={colors.onSurfaceTertiary} />
+            <Pressable onPress={() => setDiagOpen(true)} style={[styles.banner, liveOk ? styles.bannerOk : styles.bannerWarn]} testID="wa-status-banner">
+              <Icon name={liveOk ? "check" : "info"} size={16} color={colors.onSurfaceTertiary} />
               <Text style={styles.bannerText}>
-                {s.provider === "wa9x" && s.configured
-                  ? "wa.9x connected. Yahan type karke bot ko test bhi kar sakte ho — same pipeline chalta hai."
-                  : "Mock mode: wa.9x key Settings mein daalo. Tab tak yahan type karke bot test karo — entries real ledger mein jaati hain."}
+                {liveOk
+                  ? s.last_webhook_at
+                    ? `wa.9x connected · last webhook ${formatDate(s.last_webhook_at, "DD MMM, HH:mm")} (${s.webhook_hits_24h} hits/24h). Yahan type karke bot test bhi kar sakte ho.`
+                    : "wa.9x key set hai, par abhi tak koi webhook nahi aaya. Tap karke connection check karo."
+                  : live
+                    ? "wa.9x live hai par API key set nahi — Settings → WhatsApp mein daalo."
+                    : "Mock mode: wa.9x key Settings mein daalo. Tab tak yahan type karke bot test karo — entries real ledger mein jaati hain."}
               </Text>
-            </View>
+              <Icon name="chevron-right" size={16} color={colors.muted} />
+            </Pressable>
           ) : null}
           {s?.pending_question ? (
             <View style={[styles.banner, styles.bannerWarn]} testID="wa-pending-banner">
@@ -100,14 +115,14 @@ export default function WhatsAppScreen() {
           ) : null}
           {(messages.data ?? []).map((m) => (
             <View key={m.id} testID={`wa-msg-${m.id}`}>
-              <View style={styles.bubbleIn}>
+              <View style={[styles.bubbleIn, isDesktop && styles.bubbleDesk]}>
                 <Text style={styles.inText}>{m.text}</Text>
                 <Text style={[styles.meta, { textAlign: "right" }]}>
                   {formatDate(m.created_at, "DD MMM, HH:mm")} · {m.source === "simulate" ? "test" : "whatsapp"}
                 </Text>
               </View>
               {m.reply ? (
-                <View style={[styles.bubbleOut, { marginTop: 6 }]}>
+                <View style={[styles.bubbleOut, isDesktop && styles.bubbleDesk, { marginTop: 6 }]}>
                   <Text style={styles.outText}>{m.reply}</Text>
                   {m.files?.map((f) => (
                     <Pressable key={f.url} style={styles.file} onPress={() => Linking.openURL(f.url)} testID="wa-file-link">
@@ -126,7 +141,7 @@ export default function WhatsAppScreen() {
             </View>
           ) : null}
         </ScrollView>
-        <View style={[styles.inputBar, { paddingBottom: insets.bottom + 8 }]}>
+        <View style={[styles.inputBar, { paddingBottom: insets.bottom + 8 }, isDesktop && { paddingHorizontal: DESKTOP_PAD, paddingTop: 12, paddingBottom: 16 }]}>
           <TextInput
             testID="wa-input"
             style={styles.input}
@@ -143,6 +158,7 @@ export default function WhatsAppScreen() {
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+      <WaDiagnosticsSheet visible={diagOpen} onClose={() => setDiagOpen(false)} status={s} />
     </View>
   );
 }

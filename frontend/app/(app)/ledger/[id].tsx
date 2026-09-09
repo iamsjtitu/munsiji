@@ -5,13 +5,14 @@ import { FlatList, Linking, Pressable, RefreshControl, ScrollView, Switch, Text,
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
-import { Header, HeaderButton } from "@/src/components/Header";
+import { Header, HeaderButton, useHeaderButtonStyle } from "@/src/components/Header";
 import { Icon } from "@/src/components/Icon";
 import { Money } from "@/src/components/Money";
 import { Sheet } from "@/src/components/Sheet";
 import { TxnForm, type TxnValues } from "@/src/components/TxnForm";
 import { Button, Chip, Divider, EmptyState, Field, MenuRow, Segmented } from "@/src/components/ui";
 import { formatDate, formatINR, monthOptions } from "@/src/format";
+import { DESKTOP_PAD, useIsDesktop } from "@/src/hooks/useLayout";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
 import type { Group, Ledger, Statement, Transaction } from "@/src/types";
@@ -31,6 +32,9 @@ const useStyles = makeStyles((colors) => ({
   colPart: { flex: 1, paddingRight: 8 },
   colAmt: { width: 92, alignItems: "flex-end" },
   colBal: { width: 96, alignItems: "flex-end" },
+  colDateDesk: { width: 90 },
+  colAmtDesk: { width: 140 },
+  colBalDesk: { width: 150 },
   date: { fontFamily: fonts.mono, fontSize: 11, color: colors.muted },
   dateDay: { fontFamily: fonts.mono, fontSize: 14, color: colors.onSurface },
   particulars: { fontFamily: fonts.text, fontSize: 14, color: colors.onSurface },
@@ -76,6 +80,16 @@ export default function LedgerScreen() {
   const router = useRouter();
   const qc = useQueryClient();
   const toast = useToast();
+  const isDesktop = useIsDesktop();
+  const headerBtn = useHeaderButtonStyle();
+  const padX = { paddingHorizontal: isDesktop ? DESKTOP_PAD : 16 };
+  const colDate = [styles.colDate, isDesktop && styles.colDateDesk];
+  const colAmt = [styles.colAmt, isDesktop && styles.colAmtDesk];
+  const colBal = [styles.colBal, isDesktop && styles.colBalDesk];
+  const openExport = () => {
+    setExportUrl(null);
+    setMode("export");
+  };
 
   const [month, setMonth] = useState<string>("all");
   const [mode, setMode] = useState<SheetMode>(null);
@@ -189,38 +203,39 @@ export default function LedgerScreen() {
       <Header
         title={ledger?.name ?? "Ledger"}
         subtitle={groupName ? `${groupName}${ledger?.aliases.length ? ` · aka ${ledger.aliases.slice(0, 2).join(", ")}` : ""}` : undefined}
-        right={<HeaderButton icon="more-vertical" testID="ledger-menu-button" onPress={() => setMode("menu")} />}
+        right={
+          <>
+            {isDesktop ? <Button testID="ledger-export-button" title="Export" icon="file-down" variant="secondary" onPress={openExport} style={headerBtn} /> : null}
+            {isDesktop ? <Button testID="add-txn-fab" title="Nayi Entry" icon="plus" onPress={() => setMode("add")} style={headerBtn} /> : null}
+            <HeaderButton icon="more-vertical" testID="ledger-menu-button" onPress={() => setMode("menu")} />
+          </>
+        }
       >
-        <View style={styles.balanceBar}>
+        <View style={[styles.balanceBar, padX]}>
           <View>
             <Text style={styles.balLabel}>{month === "all" ? "Current balance" : "Closing balance"}</Text>
-            <Money testID="ledger-balance" value={stmt?.closing_balance ?? ledger?.current_balance ?? 0} size={26} showLabel />
+            <Money testID="ledger-balance" value={stmt?.closing_balance ?? ledger?.current_balance ?? 0} size={isDesktop ? 30 : 26} showLabel />
           </View>
-          <View style={styles.actions}>
-            <Pressable
-              testID="ledger-export-button"
-              style={styles.actionBtn}
-              onPress={() => {
-                setExportUrl(null);
-                setMode("export");
-              }}
-            >
-              <Icon name="file-down" size={16} color={colors.onSurface} />
-              <Text style={styles.actionText}>Export</Text>
-            </Pressable>
-          </View>
+          {!isDesktop ? (
+            <View style={styles.actions}>
+              <Pressable testID="ledger-export-button" style={styles.actionBtn} onPress={openExport}>
+                <Icon name="file-down" size={16} color={colors.onSurface} />
+                <Text style={styles.actionText}>Export</Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow} style={{ flexGrow: 0 }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.chipRow, padX]} style={{ flexGrow: 0 }}>
           <Chip testID="month-chip-all" label="All" selected={month === "all"} onPress={() => setMonth("all")} />
           {months.map((m) => (
             <Chip key={m.key} testID={`month-chip-${m.key}`} label={m.label} selected={month === m.key} onPress={() => setMonth(m.key)} />
           ))}
         </ScrollView>
-        <View style={styles.tableHead}>
-          <Text style={[styles.th, styles.colDate]}>Date</Text>
+        <View style={[styles.tableHead, padX]}>
+          <Text style={[styles.th, ...colDate]}>Date</Text>
           <Text style={[styles.th, styles.colPart]}>Particulars</Text>
-          <Text style={[styles.th, { width: 92, textAlign: "right" }]}>Dr / Cr</Text>
-          <Text style={[styles.th, { width: 96, textAlign: "right" }]}>Balance</Text>
+          <Text style={[styles.th, ...colAmt, { textAlign: "right" }]}>Dr / Cr</Text>
+          <Text style={[styles.th, ...colBal, { textAlign: "right" }]}>Balance</Text>
         </View>
       </Header>
 
@@ -232,7 +247,7 @@ export default function LedgerScreen() {
         ItemSeparatorComponent={() => <View style={styles.divider} />}
         ListHeaderComponent={
           stmt && month !== "all" ? (
-            <View style={styles.openRow}>
+            <View style={[styles.openRow, padX]}>
               <Text style={styles.openText}>Opening balance</Text>
               <Money value={stmt.opening_balance} size={13} />
             </View>
@@ -254,9 +269,9 @@ export default function LedgerScreen() {
               setEditing(item);
               setMode("edit");
             }}
-            style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.surfaceTertiary }]}
+            style={({ pressed }) => [styles.row, padX, pressed && { backgroundColor: colors.surfaceTertiary }]}
           >
-            <View style={styles.colDate}>
+            <View style={colDate}>
               <Text style={styles.dateDay}>{formatDate(item.entry_date, "DD")}</Text>
               <Text style={styles.date}>{formatDate(item.entry_date, "MMM YY")}</Text>
             </View>
@@ -266,18 +281,18 @@ export default function LedgerScreen() {
               </Text>
               <Text style={styles.source}>{item.source === "whatsapp" ? "via WhatsApp" : item.source === "simulate" ? "via test chat" : "manual"}</Text>
             </View>
-            <View style={styles.colAmt}>
-              <Money value={item.amount} tone={item.direction} size={14} />
+            <View style={colAmt}>
+              <Money value={item.amount} tone={item.direction} size={isDesktop ? 15 : 14} />
               <Text style={styles.drcr}>{item.direction === "debit" ? "Dr" : "Cr"}</Text>
             </View>
-            <View style={styles.colBal}>
-              <Money value={item.running_balance ?? 0} size={14} colored={false} />
+            <View style={colBal}>
+              <Money value={item.running_balance ?? 0} size={isDesktop ? 15 : 14} colored={false} />
             </View>
           </Pressable>
         )}
         ListFooterComponent={
           stmt && rows.length > 0 ? (
-            <View style={styles.totals} testID="statement-totals">
+            <View style={[styles.totals, padX]} testID="statement-totals">
               <Text style={[styles.totalLabel, { flex: 1 }]}>Total</Text>
               <View style={{ alignItems: "flex-end", width: 110 }}>
                 <Text style={{ fontFamily: fonts.mono, fontSize: 12, color: colors.error }}>Dr {formatINR(stmt.total_debit, false)}</Text>
@@ -288,9 +303,11 @@ export default function LedgerScreen() {
         }
       />
 
-      <Pressable testID="add-txn-fab" onPress={() => setMode("add")} style={[styles.fab, { bottom: insets.bottom + 20 }]}>
-        <Icon name="plus" size={26} color={colors.onBrandPrimary} />
-      </Pressable>
+      {!isDesktop ? (
+        <Pressable testID="add-txn-fab" onPress={() => setMode("add")} style={[styles.fab, { bottom: insets.bottom + 20 }]}>
+          <Icon name="plus" size={26} color={colors.onBrandPrimary} />
+        </Pressable>
+      ) : null}
 
       <Sheet visible={mode === "add"} onClose={() => setMode(null)} title="Manual Entry" testID="add-txn-sheet">
         <TxnForm onSubmit={(v) => addTxn.mutate(v)} submitting={addTxn.isPending} />

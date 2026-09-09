@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 6 focus (webhook + wa.9x diagnostics + desktop/mobile layouts) tested end-to-end. Wrote /app/backend/tests/test_webhook_diagnostics.py (16 tests, ALL PASSING) covering: wa.9x-shaped POST returns {status:'accepted'} in <2s, dedupe (duplicate), whitelist (not owner → ignored), webhook.test event (ignored), missing/wrong ?token= → 401, GET challenge echo, /whatsapp/webhook-log shape + allowed outcome enum, poll shows 'accepted' → 'processed'/'clarify' after background AI run, /whatsapp/status new fields (last_webhook_at/last_webhook_outcome/webhook_hits_24h/configured), /whatsapp/check-connection returns 400 for mock and 200 with base_url 'https://wa.9x.design/api' + auth error text when provider=wa9x with fake key (real external hit → provider correctly restored to mock after), wa9x_send_path/wa9x_send_doc_path removed from GET /settings, wa9x_webhook_secret is write-only (has_ flag + hint) with ''=keep, '-'=clear, base_url normalisation accepts 3 forms, and full HMAC signature round-trip (good sig accepted, bad sig 401, secret cleared afterwards). Regression suite (backend_test.py + test_security_hardening.py): 35/36 pass; the one failure is AI reply flakiness in test_simulate_flow_ai (fuzzy match found an existing TESTPARTY_* ledger from a prior run so bot asked to confirm instead of adding — this is AI behaviour, not a code bug). Fixed a latent test bug in backend_test.py::test_change_pin_same_value where the PIN-change response revokes all JWTs (see auth.py pin_changed_at check) — now the fixture re-logs in and updates the shared auth header. Frontend Playwright desktop (1440x900) + mobile (390x844): PIN 3366 login works; desktop-shell + sidebar (Home/WhatsApp/Summary/Settings/Logout) render correctly, Dashboard header shows 'Naya Group' + 3 stat tiles + groups grid + Recent entries column, header-back-button correctly ABSENT on Home/Summary in desktop, all Settings testIDs (settings-save-button/api-key/base-url/instance-id/webhook-url/webhook-secret/public-url) present, settings-send-path & settings-send-doc-path correctly ABSENT, wa-diagnostics-button opens wa-diagnostics-sheet with wa-diag-status + wa-diag-test + wa-check-connection-button + 20 webhook-log rows visible, sent chat 'biki mill ka balance' produced reply bubbles. Mobile: no sidebar, header icon buttons + add-group-fab visible, settings has settings-save-button + settings-logout-button (sticky). Deprecated packages: none of the flagged expo-av/expo-barcode-scanner/expo-background-fetch imports found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/settings/pin", "issue": "Any successful PIN change (even same value) writes pin_changed_at → auth.py revokes ALL existing JWTs. Fine per design, but backend_test.py had a latent bug relying on the old session token afterwards. Test file now re-logs in after the pin change."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "app/(app)/home.tsx", "issue": "Both the desktop and mobile render branches attach testID=\"home-screen\" to their outer <View>. When Expo renders (SSR + hydration) briefly, Playwright saw 2 matching nodes ('locator resolved to 2 elements'). Non-blocking but should be unique.", "testID": "home-screen", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_webhook_diagnostics.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_security_hardening.py",
+    "/app/test_reports/pytest/pytest_webhook.xml",
+    "/app/test_reports/pytest/pytest_regression.xml"
+  ],
+  "action_items": [
+    "(Optional) Guarantee a single testID=\"home-screen\" node by rendering only one of desktop/mobile branches (already does via isDesktop, but the outer <View> testID collides briefly) — assign different testIDs (e.g. home-screen-desktop / home-screen-mobile) or wrap the whole component.",
+    "test_simulate_flow_ai is flaky when TESTPARTY_* ledgers pile up across runs — consider making the cleanup fixture wipe TESTPARTY* ledgers, or make the test tolerant of the 'similar ledger already hai' clarify reply.",
+    "No action needed for the wa.9x check-connection real 401 path — that is the specified expected behaviour with a fake key; provider was restored to 'mock' with wa9x_api_key cleared at the end of the test."
+  ],
+  "critical_code_review_comments": [
+    "server.py:224 whatsapp_webhook uses BackgroundTasks correctly — HTTP 200 returned in <2s even with slow AI/provider; verified timing in tests (~0.15s response).",
+    "server.py:597 SECRET_FIELDS masking is consistent — GET /settings never leaks raw wa9x_webhook_secret; only has_ flag + hint. Nice.",
+    "server.py:670 change_pin always bumps pin_changed_at regardless of whether new PIN equals old — this is defensively correct but silently invalidates active sessions when the owner submits the same PIN. Not a bug; document in UI copy that a successful PIN save forces re-login."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_webhook_diagnostics.py (new, 16 tests)",
+    "/app/backend/tests/backend_test.py (fixed test_change_pin_same_value to re-login after PIN change)"
+  ],
+  "success_rate": {"backend": "100% new (16/16), 97% regression (35/36 — 1 AI-flakiness)", "frontend": "100% of specified testIDs found on desktop and mobile flows exercised"},
+  "seed_data_creation": "None persistent. Test file toggles provider to wa9x + fake key for one check-connection call, then restores to mock + '-' to clear key. HMAC test sets wa9x_webhook_secret='abc' then clears with '-'.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "test_webhook_diagnostics.py is the canonical suite for the new wa.9x webhook + diagnostics API. backend_test.py's session auth is now self-repairing after test_change_pin_same_value. Provider is left in 'mock' with wa9x_api_key/webhook_secret cleared; do not assume any wa9x live config. When adding new webhook tests, use payload shape {event,session_id,from,text,type,message_id,timestamp,has_media}. AI simulate tests can be flaky when TESTPARTY_* ledgers accumulate — clear them before running.",
+  "rca_of_issue": "N/A — verification iteration for a feature build, not a bug hunt. The single flaky AI test is caused by prior test runs leaving TESTPARTY_* ledgers in Mongo; the fuzzy-match branch of handle_message correctly asks for confirmation, which the test's substring assertion doesn't allow for."
+}

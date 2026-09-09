@@ -47,7 +47,13 @@ Script: Docker install → swap → clone `/opt/munsiji` → `.env` (random JWT 
 1. `https://munsiji.app` → PIN `3366` se login.
 2. **Emergent Keys**: LLM key / Email key yahan se bhi badal sakte ho (`.env` ke upar priority).
 3. **Email Alerts**: owner email (`admin@munsiji.com`), on/off switch, **Test email bhejo**. Alerts: galat PIN ×5 (lock), wa.9x reply fail, AI parsing fail, server update fail. Max 1 / 30 min per type.
-4. **WhatsApp (wa.9x)**: Base URL + API key daalo, provider **wa.9x live**, Save. wa.9x dashboard mein webhook = Settings mein dikhaya **poora URL (secret token ke saath)**: `https://munsiji.app/api/whatsapp/webhook?token=...` — bina token requests reject. "Naya webhook token banao" se rotate.
+4. **WhatsApp (wa.9x.design)** — step by step:
+   1. wa.9x dashboard → **Sessions** → QR scan karke **bot number** link karo (ye aapka owner number NAHI — alag SIM/number lo). Session settings mein **Receive Messages = ON**.
+   2. **Get my API keys** → key copy (wa9x_… se shuru). Munsiji Settings → WhatsApp → API key paste, provider **wa.9x live**, Base URL khaali (default `https://wa.9x.design/api`), **Save**.
+   3. Munsiji Settings ka **Webhook URL (poora, token ke saath)** copy karo → wa.9x → **Settings → Inbound Webhook** mein paste → Save. Optional: wa.9x ka *webhook signing secret* Munsiji mein daalo (HMAC verify).
+   4. Munsiji → WhatsApp screen → upar **activity icon** → **Test message bhejo**: owner number pe WhatsApp aayega = sending OK. Neeche **webhook log** mein har hit dikhta hai (galat token / whitelist mismatch / processed) — wa.9x ke **Test** button se bhi entry aani chahiye.
+   5. Ab apne owner number se bot number ko `Biki mill ko 5000 diya` bhejo → reply + entry.
+   Webhook 10s ke andar 200 deta hai (processing background mein), 10 fail pe wa.9x webhook auto-disable karta hai — wa.9x Settings mein *Re-enable*.
 5. Phone app ko VPS se connect: PIN screen ke upar-right **server icon** → `https://munsiji.app` → Save.
 
 Security defaults: PIN 4–8 digit (install pe prompt, common PINs reject), bar-bar galat PIN pe backoff lock + email alert, PIN badalne pe purane logins invalid, statement download links random token + 24h expiry (`EXPORT_LINK_TTL_HOURS`), backend container non-root, security headers (Caddy + nginx CSP).

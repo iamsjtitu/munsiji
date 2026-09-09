@@ -90,9 +90,8 @@ class Settings(BaseDocument):
     provider: str = "mock"  # mock | wa9x
     wa9x_base_url: str = ""
     wa9x_api_key: str = ""
-    wa9x_instance_id: str = ""
-    wa9x_send_path: str = "/send-message"
-    wa9x_send_doc_path: str = "/send-media"
+    wa9x_instance_id: str = ""  # optional wa.9x session_id (only if several numbers linked)
+    wa9x_webhook_secret: str = ""  # optional: wa.9x "webhook signing secret" → verifies X-Wa9x-Signature
     public_base_url: str = ""
     updated_at: datetime = Field(default_factory=now_utc)
 

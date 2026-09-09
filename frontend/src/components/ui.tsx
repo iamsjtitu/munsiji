@@ -1,4 +1,4 @@
-import { ActivityIndicator, Pressable, Text, TextInput, View, type TextInputProps, type ViewStyle } from "react-native";
+import { ActivityIndicator, Pressable, Text, TextInput, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
 
 import { Icon, type IconName } from "@/src/components/Icon";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
@@ -161,7 +161,7 @@ export function EmptyState({ icon, title, text, testID }: { icon: IconName; titl
   );
 }
 
-export function Card({ children, style, testID }: { children: React.ReactNode; style?: ViewStyle; testID?: string }) {
+export function Card({ children, style, testID }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; testID?: string }) {
   const styles = useStyles();
   return (
     <View style={[styles.card, style]} testID={testID}>

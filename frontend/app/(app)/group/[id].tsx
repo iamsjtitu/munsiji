@@ -5,11 +5,12 @@ import { FlatList, Pressable, RefreshControl, Text, TextInput, View } from "reac
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
-import { Header, HeaderButton } from "@/src/components/Header";
+import { Header, HeaderButton, useHeaderButtonStyle } from "@/src/components/Header";
 import { Icon } from "@/src/components/Icon";
 import { Money } from "@/src/components/Money";
 import { Sheet } from "@/src/components/Sheet";
 import { Button, EmptyState, Field } from "@/src/components/ui";
+import { DESKTOP_PAD, useIsDesktop } from "@/src/hooks/useLayout";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
 import type { Group, Ledger } from "@/src/types";
@@ -64,6 +65,9 @@ export default function GroupScreen() {
   const router = useRouter();
   const qc = useQueryClient();
   const toast = useToast();
+  const isDesktop = useIsDesktop();
+  const headerBtn = useHeaderButtonStyle();
+  const pad = isDesktop ? DESKTOP_PAD : 16;
   const [q, setQ] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -133,6 +137,7 @@ export default function GroupScreen() {
         subtitle={`${ledgers.data?.length ?? 0} ledgers`}
         right={
           <>
+            {isDesktop ? <Button testID="add-ledger-fab" title="Naya Ledger" icon="plus" onPress={() => setAddOpen(true)} style={headerBtn} /> : null}
             <HeaderButton
               icon="pencil"
               testID="group-rename-button"
@@ -144,8 +149,8 @@ export default function GroupScreen() {
           </>
         }
       >
-        <View style={styles.searchWrap}>
-          <View style={styles.search}>
+        <View style={[styles.searchWrap, { paddingHorizontal: pad }]}>
+          <View style={[styles.search, isDesktop && { maxWidth: 420 }]}>
             <Icon name="search" size={16} color={colors.muted} />
             <TextInput testID="ledger-search-input" style={styles.searchInput} value={q} onChangeText={setQ} placeholder="Ledger dhundo" placeholderTextColor={colors.muted} />
           </View>
@@ -155,7 +160,7 @@ export default function GroupScreen() {
         data={filtered}
         keyExtractor={(l) => l.id}
         refreshControl={<RefreshControl refreshing={ledgers.isFetching && !ledgers.isLoading} onRefresh={() => ledgers.refetch()} tintColor={colors.brandPrimary} />}
-        contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 96 }}
+        contentContainerStyle={{ padding: pad, paddingBottom: insets.bottom + 96 }}
         ItemSeparatorComponent={() => (
           <View style={styles.listCard}>
             <View style={styles.divider} />
@@ -202,10 +207,12 @@ export default function GroupScreen() {
           </Pressable>
         )}
       />
-      <Pressable testID="add-ledger-fab" onPress={() => setAddOpen(true)} style={[styles.fab, { bottom: insets.bottom + 20 }]}>
-        <Icon name="plus" size={20} color={colors.onBrandPrimary} />
-        <Text style={styles.fabText}>Ledger</Text>
-      </Pressable>
+      {!isDesktop ? (
+        <Pressable testID="add-ledger-fab" onPress={() => setAddOpen(true)} style={[styles.fab, { bottom: insets.bottom + 20 }]}>
+          <Icon name="plus" size={20} color={colors.onBrandPrimary} />
+          <Text style={styles.fabText}>Ledger</Text>
+        </Pressable>
+      ) : null}
 
       <Sheet visible={addOpen} onClose={() => setAddOpen(false)} title={`Naya Ledger · ${groupName}`} testID="add-ledger-sheet">
         <Field testID="ledger-name-input" label="Party / Ledger naam" value={name} onChangeText={setName} placeholder="e.g. Biki [Mill]" autoFocus />
