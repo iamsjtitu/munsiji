@@ -76,6 +76,9 @@ export type WaStatus = {
   provider: string;
   configured: boolean;
   owner_number: string;
+  owner_ids: string[];
+  pairing_code: string | null;
+  pairing_expires_at: string | null;
   webhook_url: string;
   pending_question: string | null;
   last_whatsapp_at: string | null;
@@ -99,6 +102,7 @@ export type WebhookLogEntry = {
 export type ConnectionCheck = {
   base_url: string;
   sessions: { name?: string; status?: string; phone?: string; id?: string }[];
+  sessions_raw: string;
   sessions_error: string | null;
   sent: boolean;
   send_error: string | null;

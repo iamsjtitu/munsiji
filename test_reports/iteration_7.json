@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 7 — LID pairing flow fully verified. Created /app/backend/tests/test_lid_pairing.py with 9 scenarios covering the WhatsApp LID pairing lifecycle: pre-pairing rejection with LID hint, /whatsapp/pairing-code generation, wrong-code ignore, right-code pairing via embedded digits, canonical owner-phone persistence for LID-sender messages, code single-use after consumption, DELETE /owner-ids/{id} unpair, settings hides pairing_code/pairing_expires_at, from_pn alt-phone owner recognition, and /whatsapp/check-connection→400 on mock provider. All 9 new tests pass. Regression suites test_webhook_diagnostics.py (16 tests) and test_security_hardening.py (11 tests) pass serially (36/36). Only one flake occurs under pytest-xdist parallel: test_webhook_hmac_signature vs test_security_hardening race on wa9x_webhook_secret (pre-existing, not related to LID feature). Also patched test_webhook_diagnostics.py::test_webhook_log_shape allowlist to include the new 'paired' outcome introduced by this feature. Final state: owner_ids=[], pairing_code=null, provider=mock.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "tests/test_webhook_diagnostics.py::test_webhook_hmac_signature", "issue": "Under pytest-xdist parallel scheduling this test races with test_security_hardening.py which also mutates settings.wa9x_webhook_secret; the concurrent DELETE from another worker wipes the secret between set and POST, causing 401. Serially the test passes. Not caused by the LID feature. Consider @pytest.mark.serial or scope-lock, or a distinct-per-test secret."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": [], "react_native_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_lid_pairing.py",
+    "/app/test_reports/pytest/pytest_lid_pairing.xml",
+    "/app/test_reports/pytest/pytest_iter7_serial.xml",
+    "/app/test_reports/pytest/pytest_iter7_full.xml"
+  ],
+  "action_items": [
+    "(Optional) Guard the pairing-code exact-match check with constant-time comparison (secrets.compare_digest) on server.py line 247 — currently uses '==' which is fine because the sender is already whitelisted or unknown, but better hygiene.",
+    "(Optional) test_webhook_hmac_signature and test_security_hardening both mutate the shared settings.wa9x_webhook_secret — mark them serial or use separate settings docs to eliminate the xdist race."
+  ],
+  "critical_code_review_comments": [
+    "server.py:247 — the pairing code comparison uses '==' on the digits-only substring of msg.text. This works, but a constant-time compare (secrets.compare_digest) is preferable for a secret token.",
+    "server.py:250 — new_ids filter includes both msg.sender and msg.alt_sender but skips values that match owner_number; good. However if alt_sender is a phone number matching owner, only the LID is added (correct behaviour).",
+    "wa_provider.py:231 — the swap that prefers phone-alt over LID only fires when the primary looks like a LID; when a message payload has both from=<phone> and from_pn=<phone>, no swap happens (also correct).",
+    "server.py:736-737 — status exposes pairing_code only if not expired; nice. pairing_expires_at is exposed only when pairing_code is truthy, which is slightly asymmetric with the check for expiry (a code that has just expired would report pairing_code=null but if s.pairing_code string still truthy would attempt to serialise expires_at — minor cosmetic)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_lid_pairing.py (new — 9 tests)",
+    "/app/backend/tests/test_webhook_diagnostics.py (added 'paired' to allowed outcomes list)"
+  ],
+  "success_rate": {"backend": "100% (36/36 serial; 35/36 parallel due to pre-existing xdist race)", "frontend": "n/a (backend-only run)"},
+  "seed_data_creation": "None. Cleanup fixture removes any LID entries before and after the module; final owner_ids=[], pairing_code=null, provider=mock.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "LID pairing suite in /app/backend/tests/test_lid_pairing.py covers webhook rejection (LID hint), code generation, wrong/right code, canonical owner phone in wa_messages, code single-use, DELETE unpair, from_pn recognition, mock-provider check. Two pytest files (test_webhook_diagnostics.py and test_security_hardening.py) both mutate wa9x_webhook_secret; run with -o addopts=\"\" for reliable serial regression. Provider is always mock at end.",
+  "rca_of_issue": "N/A — feature works. All requested scenarios (1-9) plus regression pass."
+}

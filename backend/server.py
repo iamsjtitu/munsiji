@@ -37,7 +37,7 @@ from ledger_service import (  # noqa: E402
     statement,
 )
 from models import Group, Ledger, Settings, Transaction, WaMessage, now_utc  # noqa: E402
-from wa_provider import ProviderNotConfigured, Wa9xProvider, get_provider, parse_incoming, same_number  # noqa: E402
+from wa_provider import ProviderNotConfigured, Wa9xProvider, digits, get_provider, is_owner, looks_like_lid, parse_incoming, same_number  # noqa: E402
 import system  # noqa: E402
 from emailer import send_alert  # noqa: E402
 import asyncio  # noqa: E402
@@ -241,8 +241,18 @@ async def whatsapp_webhook(request: Request, background: BackgroundTasks):
     if not msg:
         await _webhook_log("ignored", reason, payload, event=event)
         return {"status": "ignored", "reason": reason}
-    if not same_number(msg.sender, s.owner_number):
-        await _webhook_log("not_owner", f"Sender {msg.sender} whitelist ({s.owner_number}) se match nahi karta", payload, sender=msg.sender, text=msg.text, event=event)
+    sender_label = msg.sender + (f" / {msg.alt_sender}" if msg.alt_sender else "")
+    if not is_owner(s, msg.sender, msg.alt_sender):
+        # Pairing: owner sends the one-time code shown in the app → this sender id (LID) becomes an owner alias
+        code_ok = s.pairing_code and s.pairing_expires_at and _aware(s.pairing_expires_at) > now_utc() and secrets.compare_digest(re.sub(r"\D", "", msg.text), s.pairing_code)
+        if code_ok:
+            new_ids = [x for x in (msg.sender, msg.alt_sender) if x and not same_number(x, s.owner_number)]
+            await db.settings.update_one({"key": "main"}, {"$addToSet": {"owner_ids": {"$each": new_ids}}, "$set": {"pairing_code": "", "pairing_expires_at": None, "updated_at": now_utc()}})
+            log_id = await _webhook_log("paired", f"Sender id {sender_label} ab owner ke saath linked hai", payload, sender=msg.sender, text=msg.text, event=event)
+            background.add_task(_send_owner_text, s, "✅ Pairing ho gayi! Ab yahan se hisab likho — e.g. \"Biki mill ko 5000 diya\"", log_id)
+            return {"status": "paired"}
+        hint = " — ye WhatsApp LID lag rahi hai (phone number nahi): app → WhatsApp → Connection Check → Pairing code bhejo" if looks_like_lid(msg.sender) else ""
+        await _webhook_log("not_owner", f"Sender {sender_label} whitelist ({s.owner_number}) se match nahi karta{hint}", payload, sender=msg.sender, text=msg.text, event=event)
         return {"status": "ignored", "reason": "not owner"}
     if msg.message_id:
         try:
@@ -251,8 +261,21 @@ async def whatsapp_webhook(request: Request, background: BackgroundTasks):
             await _webhook_log("duplicate", "Same message_id dobara aaya (wa.9x retry) — skip", payload, sender=msg.sender, text=msg.text, event=event)
             return {"status": "duplicate"}
     log_id = await _webhook_log("accepted", "Processing…", payload, sender=msg.sender, text=msg.text, event=event)
-    background.add_task(_process_incoming, s, msg.sender, msg.text, msg.message_id, log_id)
+    # canonical identity = owner phone (replies + pending clarifications always go to the real number, not a LID)
+    background.add_task(_process_incoming, s, digits(s.owner_number), msg.text, msg.message_id, log_id)
     return {"status": "accepted"}
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+async def _send_owner_text(s: Settings, text: str, log_id: ObjectId):
+    try:
+        await get_provider(s).send_text(s.owner_number, text)
+    except Exception as e:  # noqa: BLE001
+        logger.error("pairing reply failed: %s", e)
+        await db.wa_webhook_log.update_one({"_id": log_id}, {"$set": {"detail": f"Paired, par reply nahi gaya: {str(e)[:200]}"}})
 
 
 @api.get("/whatsapp/webhook")
@@ -605,6 +628,8 @@ def settings_api(s: Settings) -> dict:
     d = s.api()
     d.pop("pin_hash", None)
     d.pop("webhook_secret", None)
+    d.pop("pairing_code", None)
+    d.pop("pairing_expires_at", None)
     for f in SECRET_FIELDS:
         val = d.pop(f, "") or ""
         d[f"has_{f}"] = bool(val)
@@ -707,12 +732,29 @@ async def wa_status():
     last_hook = await db.wa_webhook_log.find_one({}, sort=[("received_at", -1)])
     since = now_utc() - timedelta(hours=24)
     hits_24h = await db.wa_webhook_log.count_documents({"received_at": {"$gte": since}})
-    return {"provider": s.provider, "configured": wa_configured(s), "owner_number": s.owner_number,
+    return {"provider": s.provider, "configured": wa_configured(s), "owner_number": s.owner_number, "owner_ids": s.owner_ids or [],
+            "pairing_code": s.pairing_code if s.pairing_code and s.pairing_expires_at and _aware(s.pairing_expires_at) > now_utc() else None,
+            "pairing_expires_at": _iso(s.pairing_expires_at) if s.pairing_code else None,
             "webhook_url": webhook_url(s), "pending_question": pending["question"] if pending else None,
             "last_whatsapp_at": _iso(last["created_at"]) if last else None,
             "last_webhook_at": _iso(last_hook["received_at"]) if last_hook else None,
             "last_webhook_outcome": last_hook["outcome"] if last_hook else None,
             "webhook_hits_24h": hits_24h}
+
+
+@protected.post("/whatsapp/pairing-code")
+async def wa_pairing_code():
+    """One-time 6-digit code (15 min). Owner sends it from WhatsApp to the bot → that sender id gets whitelisted (LID pairing)."""
+    code = f"{secrets.randbelow(900000) + 100000}"
+    exp = now_utc() + timedelta(minutes=15)
+    await db.settings.update_one({"key": "main"}, {"$set": {"pairing_code": code, "pairing_expires_at": exp, "updated_at": now_utc()}})
+    return {"code": code, "expires_at": exp.isoformat()}
+
+
+@protected.delete("/whatsapp/owner-ids/{sender_id}")
+async def wa_remove_owner_id(sender_id: str):
+    await db.settings.update_one({"key": "main"}, {"$pull": {"owner_ids": sender_id}, "$set": {"updated_at": now_utc()}})
+    return {"owner_ids": (await get_settings()).owner_ids}
 
 
 @protected.get("/whatsapp/webhook-log")
@@ -735,17 +777,18 @@ async def wa_check_connection():
     if not wa_configured(s):
         raise HTTPException(400, "wa.9x API key set nahi hai — Settings → WhatsApp mein daalo")
     p = Wa9xProvider(s)
-    out: dict = {"base_url": p.base, "sessions": [], "sessions_error": None, "sent": False, "send_error": None}
+    out: dict = {"base_url": p.base, "sessions": [], "sessions_raw": "", "sessions_error": None, "sent": False, "send_error": None}
     try:
-        sess = await p.sessions()
+        sess, raw = await p.sessions()
+        out["sessions_raw"] = raw
         out["sessions"] = [{"name": x.get("name"), "status": x.get("status"), "phone": x.get("phone") or x.get("number"), "id": x.get("id")} for x in sess if isinstance(x, dict)]
     except Exception as e:  # noqa: BLE001
-        out["sessions_error"] = str(e)[:300]
+        out["sessions_error"] = (str(e) or type(e).__name__)[:300]
     try:
         await p.send_text(s.owner_number, "✅ Munsiji connected! Ab yahan hisab likho — e.g. \"Biki mill ko 5000 diya\"")
         out["sent"] = True
     except Exception as e:  # noqa: BLE001
-        out["send_error"] = str(e)[:300]
+        out["send_error"] = (str(e) or type(e).__name__)[:300]
     return out
 
 

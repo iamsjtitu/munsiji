@@ -92,6 +92,9 @@ class Settings(BaseDocument):
     wa9x_api_key: str = ""
     wa9x_instance_id: str = ""  # optional wa.9x session_id (only if several numbers linked)
     wa9x_webhook_secret: str = ""  # optional: wa.9x "webhook signing secret" → verifies X-Wa9x-Signature
+    owner_ids: List[str] = []  # paired sender ids (WhatsApp LIDs) that also count as the owner
+    pairing_code: str = ""  # one-time code the owner sends from WhatsApp to link a LID
+    pairing_expires_at: Optional[datetime] = None
     public_base_url: str = ""
     updated_at: datetime = Field(default_factory=now_utc)
 

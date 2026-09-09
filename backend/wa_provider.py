@@ -17,6 +17,7 @@ class IncomingMessage:
     sender: str
     text: str
     message_id: Optional[str]
+    alt_sender: Optional[str] = None  # e.g. WhatsApp LID when a phone number is also present (or vice versa)
 
 
 def digits(num: str) -> str:
@@ -28,6 +29,23 @@ def same_number(a: str, b: str) -> bool:
     if not da or not db_:
         return False
     return da == db_ or da[-10:] == db_[-10:]
+
+
+def looks_like_lid(sender: str) -> bool:
+    """WhatsApp privacy IDs (xxx@lid) are 14–16 digit numbers, longer than any phone number (max 15 incl. country code, India = 12)."""
+    d = digits(sender)
+    return len(d) >= 14
+
+
+def is_owner(settings: Settings, *ids: Optional[str]) -> bool:
+    """Owner = whitelist phone number OR any paired sender id (LID) saved in settings.owner_ids."""
+    extra = {digits(x) for x in (settings.owner_ids or [])}
+    for i in ids:
+        if not i:
+            continue
+        if same_number(i, settings.owner_number) or digits(i) in extra:
+            return True
+    return False
 
 
 class ProviderNotConfigured(Exception):
@@ -106,8 +124,12 @@ class Wa9xProvider(WhatsAppProvider):
         if self.s.wa9x_instance_id:
             payload["session_id"] = self.s.wa9x_instance_id
         url = f"{self.base}/v1/messages"
-        async with httpx.AsyncClient(timeout=25) as client:
-            r = await client.post(url, json=payload, headers=self._headers())
+        try:
+            async with httpx.AsyncClient(timeout=25) as client:
+                r = await client.post(url, json=payload, headers=self._headers())
+        except httpx.HTTPError as e:
+            await db.wa_outbox.insert_one({"to": payload.get("to"), "type": "text", "payload": payload, "status": "failed", "response": f"{type(e).__name__}: {e}", "created_at": now_utc()})
+            raise RuntimeError(f"wa.9x tak request nahi gayi ({type(e).__name__}: {str(e) or 'timeout/network'}) — VPS se {self.base} reachable hai?") from e
         try:
             data = r.json() if r.text else {}
         except ValueError:
@@ -130,8 +152,8 @@ class Wa9xProvider(WhatsAppProvider):
     async def send_document(self, to: str, url: str, filename: str, caption: str = "") -> dict:
         return await self._send({"to": digits(to), "media_url": url, "caption": caption or filename, "text": caption or filename})
 
-    async def sessions(self) -> list:
-        """GET /api/v1/sessions → [{id, name, status, phone}] — used by the in-app connection check."""
+    async def sessions(self) -> tuple[list, str]:
+        """GET /api/v1/sessions → ([{id, name, status, phone}], raw_text) — used by the in-app connection check."""
         self._check()
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.get(f"{self.base}/v1/sessions", headers=self._headers())
@@ -139,10 +161,13 @@ class Wa9xProvider(WhatsAppProvider):
             raise RuntimeError("wa.9x ne API key reject ki (401) — Settings mein sahi X-API-Key daalo (wa9x_... se shuru)")
         if r.status_code >= 300:
             raise RuntimeError(f"wa.9x {r.status_code}: {r.text[:200]}")
-        data = r.json()
+        try:
+            data = r.json()
+        except ValueError:
+            return [], r.text[:400]
         if isinstance(data, dict):
-            data = data.get("sessions") or data.get("result") or data.get("data") or []
-        return data if isinstance(data, list) else []
+            data = data.get("sessions") or data.get("result") or data.get("data") or data.get("items") or []
+        return (data if isinstance(data, list) else []), r.text[:400]
 
 
 def get_provider(settings: Settings) -> WhatsAppProvider:
@@ -180,6 +205,12 @@ def parse_incoming(payload: Any) -> tuple[Optional[IncomingMessage], str]:
         sender = body["key"].get("remoteJid")
     if isinstance(sender, dict):
         sender = _first(sender, ["number", "id", "phone"])
+    # Baileys ≥6.7 delivers privacy IDs (xxx@lid); the real phone may ride along in an alt field
+    alt = _first(body, ["from_pn", "sender_pn", "senderPn", "participant_pn", "participantPn", "phone_number", "remoteJidAlt", "alt_jid", "senderPhone", "sender_phone"])
+    if isinstance(body.get("key"), dict) and not alt:
+        alt = _first(body["key"], ["senderPn", "participantPn", "remoteJidAlt"])
+    if isinstance(alt, dict):
+        alt = _first(alt, ["number", "id", "phone"])
     text = _first(body, ["text", "message", "body", "content", "caption", "msg"])
     if isinstance(text, dict):
         text = _first(text, ["body", "text", "conversation", "message"])
@@ -196,4 +227,7 @@ def parse_incoming(payload: Any) -> tuple[Optional[IncomingMessage], str]:
         return None, "group message"
     if not isinstance(text, str) or not text.strip():
         return None, "text nahi hai (media/sticker?)" if body.get("has_media") or body.get("type") not in (None, "text", "chat") else "text khaali hai"
-    return IncomingMessage(sender=digits(str(sender)), text=text.strip(), message_id=str(mid) if mid else None), "ok"
+    sender_d, alt_d = digits(str(sender)), digits(str(alt)) if alt and "@g.us" not in str(alt) else ""
+    if alt_d and alt_d != sender_d and looks_like_lid(sender_d) and not looks_like_lid(alt_d):
+        sender_d, alt_d = alt_d, sender_d  # prefer the real phone number as primary
+    return IncomingMessage(sender=sender_d, text=text.strip(), message_id=str(mid) if mid else None, alt_sender=alt_d or None), "ok"

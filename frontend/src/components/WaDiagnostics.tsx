@@ -40,6 +40,7 @@ const OUTCOME_LABEL: Record<string, string> = {
   clarify: "Bot ne sawaal pucha",
   ignored: "Ignore kiya",
   not_owner: "Number whitelist mein nahi",
+  paired: "Pairing ho gayi ✓",
   duplicate: "Duplicate",
   invalid_token: "Galat webhook token",
   bad_signature: "Signature mismatch",
@@ -50,7 +51,7 @@ const OUTCOME_LABEL: Record<string, string> = {
 function OutcomeBadge({ outcome }: { outcome: string }) {
   const styles = useStyles();
   const { colors } = useTheme();
-  const good = outcome === "processed" || outcome === "clarify";
+  const good = outcome === "processed" || outcome === "clarify" || outcome === "paired";
   const bad = ["invalid_token", "bad_signature", "send_failed", "error", "not_owner"].includes(outcome);
   const bg = good ? colors.successSoft : bad ? colors.errorSoft : colors.surfaceTertiary;
   const fg = good ? colors.success : bad ? colors.error : colors.onSurfaceTertiary;
@@ -96,8 +97,18 @@ export function WaDiagnosticsSheet({ visible, onClose, status }: { visible: bool
     mutationFn: () => api.post<ConnectionCheck>("/whatsapp/check-connection"),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["wa-messages"] }),
   });
+  const pairing = useMutation({
+    mutationFn: () => api.post<{ code: string; expires_at: string }>("/whatsapp/pairing-code"),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["wa-status"] }),
+  });
+  const removeId = useMutation({
+    mutationFn: (id: string) => api.del(`/whatsapp/owner-ids/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["wa-status"] }),
+  });
   const r = check.data;
   const live = status?.provider === "wa9x";
+  const lidSeen = (log.data ?? []).some((e) => e.outcome === "not_owner" && e.sender.length >= 14);
+  const pairingCode = status?.pairing_code ?? null;
 
   return (
     <Sheet visible={visible} onClose={onClose} title="wa.9x Connection Check" testID="wa-diagnostics-sheet">
@@ -115,6 +126,17 @@ export function WaDiagnosticsSheet({ visible, onClose, status }: { visible: bool
           <Text style={styles.k}>Owner number (whitelist)</Text>
           <Text style={[styles.v, { fontFamily: fonts.mono }]}>{status?.owner_number}</Text>
         </View>
+        {(status?.owner_ids ?? []).map((id) => (
+          <View key={id} style={styles.kv} testID={`wa-owner-id-${id}`}>
+            <Text style={styles.k}>Linked WhatsApp ID</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Text style={[styles.v, { fontFamily: fonts.mono }]}>{id}</Text>
+              <Pressable onPress={() => removeId.mutate(id)} hitSlop={8} testID={`wa-owner-id-remove-${id}`}>
+                <Icon name="x" size={16} color={colors.muted} />
+              </Pressable>
+            </View>
+          </View>
+        ))}
         <View style={styles.kv}>
           <Text style={styles.k}>Last webhook</Text>
           <Text style={styles.v} testID="wa-diag-last-webhook">
@@ -125,6 +147,37 @@ export function WaDiagnosticsSheet({ visible, onClose, status }: { visible: bool
           <Text style={styles.k}>Webhook hits (24h)</Text>
           <Text style={[styles.v, { fontFamily: fonts.mono }]}>{status?.webhook_hits_24h ?? 0}</Text>
         </View>
+      </Card>
+
+      <Card style={[styles.card, lidSeen && !pairingCode && (status?.owner_ids ?? []).length === 0 ? { borderColor: colors.warning } : undefined]} testID="wa-diag-pairing">
+        <Text style={styles.title}>Pairing (agar aapka number pehchana nahi ja raha)</Text>
+        <Text style={styles.hint}>
+          Naye WhatsApp mein sender kabhi phone number ki jagah ek lambi ID (LID, e.g. 1369…) ke roop mein aata hai — tab whitelist match nahi hota. Fix: neeche code banao aur apne WhatsApp se bot number ko wahi code bhejo. Us ID ko owner maan liya jaayega.
+        </Text>
+        {lidSeen && (status?.owner_ids ?? []).length === 0 ? (
+          <Text style={[styles.hint, { color: colors.warning, marginTop: 6, fontWeight: "700" }]} testID="wa-lid-warning">
+            Webhook log mein LID wala message dikha — pairing zaroori hai.
+          </Text>
+        ) : null}
+        {pairingCode ? (
+          <View style={[styles.result, { backgroundColor: colors.brandTertiary, alignItems: "center" }]} testID="wa-pairing-code">
+            <Text style={[styles.resultText, { color: colors.onBrandTertiary }]}>Bot number ko ye code WhatsApp karo (15 min valid):</Text>
+            <Text selectable style={{ fontFamily: fonts.mono, fontSize: 34, letterSpacing: 6, color: colors.onBrandTertiary, marginVertical: 4 }}>
+              {pairingCode}
+            </Text>
+            <Text style={[styles.resultText, { color: colors.onBrandTertiary }]}>Bhejne ke baad yahan &quot;Pairing ho gayi ✓&quot; dikhega aur WhatsApp pe confirmation aayegi.</Text>
+          </View>
+        ) : null}
+        <Button
+          testID="wa-pairing-button"
+          title={pairingCode ? "Naya code banao" : "Pairing code banao"}
+          icon="link"
+          variant={pairingCode ? "ghost" : "secondary"}
+          style={{ marginTop: 10 }}
+          onPress={() => pairing.mutate()}
+          loading={pairing.isPending}
+        />
+        {pairing.isError ? <Text style={[styles.hint, { color: colors.error, marginTop: 8 }]}>{(pairing.error as Error).message}</Text> : null}
       </Card>
 
       <Card style={styles.card} testID="wa-diag-test">
@@ -140,7 +193,7 @@ export function WaDiagnosticsSheet({ visible, onClose, status }: { visible: bool
           loading={check.isPending}
           disabled={!live}
         />
-        {!live ? <Text style={[styles.hint, { marginTop: 8, color: colors.warning }]}>Settings mein provider "wa.9x live" karke Save karo.</Text> : null}
+        {!live ? <Text style={[styles.hint, { marginTop: 8, color: colors.warning }]}>Settings mein provider &quot;wa.9x live&quot; karke Save karo.</Text> : null}
         {check.isError ? (
           <View style={[styles.result, { backgroundColor: colors.errorSoft }]} testID="wa-check-error">
             <Text style={[styles.resultText, { color: colors.error }]}>{(check.error as Error).message}</Text>
@@ -148,12 +201,21 @@ export function WaDiagnosticsSheet({ visible, onClose, status }: { visible: bool
         ) : null}
         {r ? (
           <View style={[styles.result, { backgroundColor: r.sent ? colors.successSoft : colors.errorSoft }]} testID="wa-check-result">
-            <Text style={[styles.resultText, { color: r.sent ? colors.success : colors.error, fontWeight: "700" }]}>{r.sent ? "✓ Test message bhej diya — WhatsApp check karo" : `✗ Send fail: ${r.send_error}`}</Text>
+            <Text style={[styles.resultText, { color: r.sent ? colors.success : colors.error, fontWeight: "700" }]}>{r.sent ? "✓ Test message bhej diya — WhatsApp check karo" : `✗ Send fail: ${r.send_error || "unknown error"}`}</Text>
             <Text style={[styles.resultText, { color: colors.onSurfaceTertiary }]}>API: {r.base_url}</Text>
             {r.sessions_error ? (
               <Text style={[styles.resultText, { color: colors.error }]}>Sessions: {r.sessions_error}</Text>
             ) : r.sessions.length === 0 ? (
-              <Text style={[styles.resultText, { color: colors.onSurfaceTertiary }]}>Koi linked WhatsApp session nahi mila — wa.9x mein QR scan karke number link karo.</Text>
+              <>
+                <Text style={[styles.resultText, { color: colors.onSurfaceTertiary }]}>
+                  Is API key pe koi connected WhatsApp session nahi mila — wa.9x → Sessions mein check karo ki bot number &quot;connected&quot; hai aur API key usi account/session ki hai.
+                </Text>
+                {r.sessions_raw ? (
+                  <Text style={styles.raw} selectable>
+                    wa.9x /v1/sessions → {r.sessions_raw}
+                  </Text>
+                ) : null}
+              </>
             ) : (
               r.sessions.map((s, i) => (
                 <Text key={s.id ?? i} style={[styles.resultText, { color: colors.onSurfaceTertiary }]}>

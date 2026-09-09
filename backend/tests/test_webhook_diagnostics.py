@@ -127,7 +127,7 @@ def test_webhook_log_shape(auth, webhook_url):
     docs = r.json()
     assert isinstance(docs, list) and len(docs) > 0
     allowed = {"invalid_token", "bad_signature", "ignored", "not_owner", "duplicate",
-               "accepted", "processed", "clarify", "send_failed", "error"}
+               "accepted", "processed", "clarify", "send_failed", "error", "paired"}
     for d in docs:
         for k in ("id", "received_at", "outcome", "detail", "sender", "text", "raw"):
             assert k in d, f"missing key {k} in {d}"
