@@ -1,12 +1,12 @@
 {
   "expo": {
-    "name": "frontend",
+    "name": "Munsiji",
     "slug": "frontend",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
-    "userInterfaceStyle": "automatic",
+    "scheme": "munsiji",
+    "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.emergent.whatsappmunim.fyln32"
@@ -14,14 +14,19 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000000"
+        "backgroundColor": "#047857"
       },
       "package": "com.emergent.whatsappmunim.fyln32"
     },
     "web": {
       "bundler": "metro",
       "output": "single",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "name": "Munsiji",
+      "shortName": "Munsiji",
+      "themeColor": "#FAFAFA",
+      "backgroundColor": "#FAFAFA",
+      "display": "standalone"
     },
     "plugins": [
       "expo-router",

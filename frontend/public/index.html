@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <meta charset="utf-8" />
+    <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no, shrink-to-fit=no" />
+    <title>%WEB_TITLE%</title>
+    <meta name="description" content="Munsiji — aapka personal WhatsApp munim. Ledgers, running balance, statements." />
+
+    <!-- PWA: installable, full-screen app on phone -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#FAFAFA" />
+    <meta name="application-name" content="Munsiji" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Munsiji" />
+    <meta name="format-detection" content="telephone=no" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/icons/favicon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+
+    <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
+    <style id="expo-reset">
+      html,
+      body {
+        height: 100%;
+        background: #fafafa;
+        /* app-like feel: no rubber-band / pull-to-refresh, no tap flash, no double-tap zoom */
+        overscroll-behavior: none;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        -webkit-text-size-adjust: 100%;
+      }
+      body {
+        overflow: hidden;
+        margin: 0;
+        -webkit-font-smoothing: antialiased;
+      }
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+      input,
+      textarea {
+        -webkit-user-select: text;
+        user-select: text;
+      }
+    </style>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("/sw.js").catch(function () {});
+        });
+      }
+    </script>
+  </head>
+
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>
