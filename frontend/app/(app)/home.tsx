@@ -135,6 +135,7 @@ function RecentList({ recent }: { recent: Transaction[] }) {
                 <Text style={styles.recentMeta} numberOfLines={1}>
                   {formatDate(t.entry_date)} · {t.note || verb} · {t.source}
                   {t.via ? ` · via ${t.via}` : ""}
+                  {t.tags?.length ? ` · #${t.tags[0]}` : ""}
                 </Text>
               </View>
               <Money value={t.amount} tone={moneyIn ? "credit" : "debit"} size={15} />

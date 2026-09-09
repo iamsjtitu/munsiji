@@ -132,3 +132,8 @@ frontend:
 agent_communication:
   - agent: "main"
     message: "Test backend webhook flow with the real wa.9x payload shape {event:'message.received',from,text,message_id}; webhook must answer 200 within ~1s with status 'accepted', second identical message_id → 'duplicate', non-owner → 'ignored', wrong token → 401 (all logged in GET /api/whatsapp/webhook-log). Frontend: test at 1440px (desktop shell) AND 390px (mobile) — both must work."
+
+## Iteration 9 (main agent) — transfers, long PIN, expense tags
+  - POST /api/transfers, AI/fallback intent transfer, TxnForm account-transfer mode
+  - PIN 4-8 digits with ✓ key (pin-key-ok) + Enter; remembered length auto-submit
+  - Transaction.tags, GET /api/tags, summary.categories, TxnForm tag chips (txn-tag-<tag>, txn-tag-input, txn-tag-add)

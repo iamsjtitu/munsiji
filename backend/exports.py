@@ -34,13 +34,20 @@ def _safe_text(s: str) -> str:
 
 
 def _rows(stmt: dict):
-    out = [["Date", "Particulars", "Debit", "Credit", "Balance"]]
+    acct = (stmt.get("ledger") or {}).get("kind") in ("cash", "bank")
+    out = [["Date", "Particulars", "In" if acct else "Debit", "Out" if acct else "Credit", "Balance"]]
     out.append(["", "Opening Balance", "", "", f"{stmt['opening_balance']:,.2f}"])
     for r in stmt["rows"]:
+        default = ("Jama" if r["direction"] == "debit" else "Nikla") if acct else ("Diya" if r["direction"] == "debit" else "Mila")
+        part = r.get("note") or default
+        if r.get("via"):
+            part += f" [via {r['via']}]"
+        if r.get("tags"):
+            part += " " + " ".join(f"#{t}" for t in r["tags"])
         out.append(
             [
                 _d(r["entry_date"]),
-                _safe_text(r.get("note") or ("Diya" if r["direction"] == "debit" else "Mila")),
+                _safe_text(part),
                 _n(r["amount"]) if r["direction"] == "debit" else "",
                 _n(r["amount"]) if r["direction"] == "credit" else "",
                 f"{r['running_balance']:,.2f}",

@@ -1,13 +1,14 @@
 """WhatsApp bot pipeline: message -> parse -> ledger action -> Hinglish reply."""
 import logging
 import os
+import re
 import secrets
 from datetime import date, datetime, time, timedelta, timezone
 from typing import List, Optional
 
 from bson import ObjectId
 
-from ai_parser import IST, ai_parse, parsed_date_or_none, today_ist
+from ai_parser import IST, NO_WORDS, YES_WORDS, ai_parse, parsed_date_or_none, today_ist
 from db import db
 from exports import build_export
 from ledger_service import (
@@ -17,6 +18,7 @@ from ledger_service import (
     create_ledger,
     delete_transaction,
     detect_mode,
+    detect_tags,
     fmt_inr,
     fuzzy_match,
     get_ledger,
@@ -24,6 +26,7 @@ from ledger_service import (
     list_ledgers,
     recalc_balance,
     statement,
+    transfer,
     update_transaction,
 )
 from models import ExportFile, Group, Ledger, Pending, Settings, WaMessage, now_utc
@@ -139,6 +142,27 @@ class Bot:
         return "new", None, None
 
     # ------------------------------------------------------------ actions
+    async def do_transfer(self, parsed: dict, text: str) -> str:
+        """Own-account transfer: bank → cash (nikala/withdraw) or cash → bank (jama/deposit)."""
+        entries = parsed.get("entries") or []
+        amount = entries[0].get("amount") if entries else parsed.get("new_amount")
+        if not amount or float(amount) <= 0:
+            return "Amount samajh nahi aaya. Aise likho: 'bank se 50000 cash nikala'"
+        frm = (parsed.get("from_account") or "").lower()
+        to = (parsed.get("to_account") or "").lower()
+        if frm not in ("cash", "bank") or to not in ("cash", "bank") or frm == to:
+            low = text.lower()
+            frm, to = ("cash", "bank") if any(w in low for w in ("jama", "deposit", "bank me", "bank mein", "dala", "daala")) else ("bank", "cash")
+        d = parsed_date_or_none(parsed.get("entry_date"))
+        note = (entries[0].get("note") if entries else "") or ("nikala" if frm == "bank" else "jama")
+        _, from_l, to_l = await transfer(frm, to, float(amount), note, ist_datetime_for(d), "whatsapp" if self.source == "whatsapp" else "app",
+                                         wa_message_id=self.wa_message_id, sender=self.sender)
+        from_l, to_l = await get_ledger(from_l.id), await get_ledger(to_l.id)  # fresh balances
+        when = f" [{nice_date(d)}]" if d and d != today_ist() else ""
+        return (f"Transfer: {fmt_inr(float(amount))} {from_l.name} → {to_l.name}{when}.\n"
+                f"{to_l.name}: {balance_text(to_l.current_balance, to_l.kind)}\n"
+                f"{from_l.name}: {balance_text(from_l.current_balance, from_l.kind)}")
+
     async def do_entry(self, ledger: Ledger, parsed: dict, is_new: bool, group_name: str = "", text: str = "") -> str:
         d = parsed_date_or_none(parsed.get("entry_date"))
         entry_dt = ist_datetime_for(d)
@@ -146,9 +170,10 @@ class Bot:
         touched_accounts: dict = {}
         for e in parsed.get("entries") or []:
             mode = None if ledger.is_account else resolve_mode(parsed.get("mode"), text, e.get("note") or "")
+            tags = e.get("tags") or parsed.get("tags") or detect_tags(text, e.get("note") or "")
             txn = await add_transaction(
                 ledger.id, e["amount"], e["direction"], e.get("note") or "", entry_dt, "whatsapp" if self.source == "whatsapp" else "app",
-                wa_message_id=self.wa_message_id, sender=self.sender, mode=mode,
+                wa_message_id=self.wa_message_id, sender=self.sender, mode=mode, tags=tags,
             )
             if txn.contra_ledger_id:
                 touched_accounts[txn.contra_ledger_id] = mode
@@ -156,7 +181,8 @@ class Bot:
                 verb = "jama (in)" if e["direction"] == "debit" else "nikla (out)"
             else:
                 verb = "diya" if e["direction"] == "debit" else "mila"
-            lines.append(f"{fmt_inr(e['amount'])} {verb}" + (f" ({e['note']})" if e.get("note") else ""))
+            tag_s = (" #" + " #".join(txn.tags)) if txn.tags else ""
+            lines.append(f"{fmt_inr(e['amount'])} {verb}" + (f" ({e['note']})" if e.get("note") else "") + tag_s)
         bal = await recalc_balance(ledger.id)
         head = f"Naya ledger bana: {ledger.name} ({group_name}). " if is_new else f"{ledger.name}: "
         when = f" [{nice_date(d)}]" if d and d != today_ist() else ""
@@ -250,7 +276,10 @@ class Bot:
         if kind == "confirm_match":
             ledger = await get_ledger(payload["ledger_id"])
             action = payload.get("action")
-            if intent == "yes" or low in ("usme", "same", "wahi", "haan usme"):
+            words = re.findall(r"[a-z]+", low)
+            says_yes = intent == "yes" or low in ("usme", "same", "wahi", "haan usme") or (words and all(w in YES_WORDS for w in words))
+            says_no = intent == "no" or (words and all(w in NO_WORDS for w in words)) or (parsed.get("choice") or "").lower() in NO_WORDS
+            if says_yes:
                 await self.clear_pending()
                 if not ledger:
                     return "Ledger nahi mila."
@@ -261,7 +290,7 @@ class Bot:
                 if action == "statement":
                     return await self.do_statement(ledger, payload.get("format"), parsed_date_or_none(payload.get("from")), parsed_date_or_none(payload.get("to")))
                 return await self.do_balance(ledger)
-            if intent == "no":
+            if says_no:
                 await self.clear_pending()
                 if action == "entry":
                     group = await get_or_create_group(payload.get("group_name"))
@@ -307,6 +336,8 @@ class Bot:
             return await self.do_delete_last()
         if intent == "correct_last":
             return await self.do_correct_last(parsed.get("new_amount"))
+        if intent == "transfer":
+            return await self.do_transfer(parsed, text)
 
         if intent in ("entry", "statement", "balance"):
             if intent == "entry" and not parsed.get("entries"):

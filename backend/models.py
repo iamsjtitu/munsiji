@@ -66,6 +66,7 @@ class Transaction(BaseDocument):
     amount: float
     direction: Direction
     note: str = ""
+    tags: List[str] = []  # expense categories e.g. ["petrol"], lowercase
     entry_date: datetime
     source: str = "app"  # whatsapp | app
     wa_message_id: Optional[str] = None

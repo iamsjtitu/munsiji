@@ -14,6 +14,7 @@ import { DESKTOP_PAD, useIsDesktop } from "@/src/hooks/useLayout";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
 import { UPDATE_BUSY_STATES, type Settings } from "@/src/types";
+import { storage } from "@/src/utils/storage";
 
 const useStyles = makeStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.surface },
@@ -216,6 +217,7 @@ export default function SettingsScreen() {
   const changePin = useMutation({
     mutationFn: () => api.put("/settings/pin", { old_pin: oldPin, new_pin: newPin }),
     onSuccess: () => {
+      void storage.setItem("munsiji_pin_len", newPin.length); // PIN screen auto-submits at this length
       setOldPin("");
       setNewPin("");
       toast.show("PIN badal gaya — naye PIN se login karo", "success");

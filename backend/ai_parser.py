@@ -39,7 +39,8 @@ Conventions:
 - matched_ledger_id: choose from EXISTING LEDGERS if the party clearly refers to one of them (ignore typos, case, brackets, spacing, e.g. "biki mill" == "Biki [Mill]"). Otherwise null. match_confidence: "high" if clearly same, "medium" if plausible but unsure, "none" if it is a new party.
 - entry_date: resolve relative dates ("kal"=yesterday, "aaj"=today, "parso"=day before yesterday, "2 din pehle", "5 tarikh", "7 jan") using TODAY. Format YYYY-MM-DD. null if not mentioned.
 - Intents:
-  * "entry": record one or more amounts for a party. entries = [{amount, direction, note}]. Multiple amounts in one message => multiple entries.
+  * "entry": record one or more amounts for a party. entries = [{amount, direction, note, tags}]. Multiple amounts in one message => multiple entries. tags = expense categories as 0-3 lowercase single words from this list when the message implies them: petrol, staff, bijli, rent, maal, transport, khana, repair, tax, byaj, mobile, personal (e.g. "diesel 3000 diya" => ["petrol"]; "Mantu ko salary diya" => ["staff"]; "bijli bill 2500" => ["bijli"]). Empty list if none apply.
+  * "transfer": money moved between the owner's OWN accounts — bank→cash ("bank se 50000 cash nikala", "ATM se 5000 nikale", "withdraw") or cash→bank ("20000 cash bank me jama kiya", "deposit kiya"). Fill from_account and to_account with "cash" or "bank", entries = [{amount, direction:"debit", note}]. No party_name.
   * "delete_last": user wants the last entry removed ("last entry delete karo").
   * "correct_last": user corrects the last amount ("500 nahi 700 tha" => new_amount 700).
   * "statement": user wants a ledger/statement/hisab sent ("cash account ka ledger bhej", "7 jan 2026 se aaj tak ka ledger bhej"). Fill party_name, from_date, to_date (YYYY-MM-DD or null), format ("pdf"|"excel"|"csv"|null if not specified).
@@ -50,7 +51,7 @@ Conventions:
 - If the message is genuinely ambiguous about WHICH party (e.g. only an amount, no name, and no pending context), use intent "unknown" with a clarification. Never guess a party.
 
 Return ONLY a JSON object with keys:
-intent, party_name, group_name, matched_ledger_id, match_confidence, entries, entry_date, mode, new_amount, from_date, to_date, format, choice, clarification.
+intent, party_name, group_name, matched_ledger_id, match_confidence, entries, entry_date, mode, from_account, to_account, new_amount, from_date, to_date, format, choice, clarification.
 No markdown, no explanation."""
 
 
@@ -110,7 +111,8 @@ async def ai_parse(text: str, ledgers: List[Ledger], groups: List[Group], pendin
         parsed = Parsed(data)
         parsed.setdefault("entries", [])
         parsed["entries"] = [
-            {"amount": float(e.get("amount", 0)), "direction": e.get("direction") or "debit", "note": e.get("note") or ""}
+            {"amount": float(e.get("amount", 0)), "direction": e.get("direction") or "debit", "note": e.get("note") or "",
+             "tags": [str(t) for t in (e.get("tags") or []) if t][:3]}
             for e in (parsed.get("entries") or [])
             if e and float(e.get("amount") or 0) > 0
         ]
@@ -176,6 +178,13 @@ def fallback_parse(text: str, ledgers: List[Ledger]) -> Parsed:
     amounts = _amounts(t)
     if any(w in low for w in DELETE_WORDS) and "last" in low or ("last" in low and "delete" in low):
         p["intent"] = "delete_last"
+        return p
+    # own-account transfer: bank→cash (nikala/withdraw/atm) or cash→bank (jama/deposit)
+    if amounts and ("bank" in low or "atm" in low) and any(w in low for w in ("nikal", "nikaal", "withdraw", "atm", "jama", "deposit", "cash")):
+        to_bank = any(w in low for w in ("jama", "deposit", "bank me", "bank mein", "dala", "daala"))
+        p.update(intent="transfer", from_account="cash" if to_bank else "bank", to_account="bank" if to_bank else "cash",
+                 entries=[{"amount": amounts[0], "direction": "debit", "note": "jama" if to_bank else "nikala", "tags": []}],
+                 entry_date=(_relative_date(t) or None) and _relative_date(t).isoformat())
         return p
     m = re.search(r"(\d[\d,]*)\s*nahi\s*(\d[\d,]*)", low)
     if m:

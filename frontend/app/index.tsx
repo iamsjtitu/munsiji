@@ -10,8 +10,12 @@ import { Sheet } from "@/src/components/Sheet";
 import { Button, Field } from "@/src/components/ui";
 import { useIsDesktop } from "@/src/hooks/useLayout";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
+import { storage } from "@/src/utils/storage";
 
-const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "del"];
+const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "ok", "0", "del"];
+const PIN_MIN = 4;
+const PIN_MAX = 8;
+const PIN_LEN_KEY = "munsiji_pin_len";
 
 const useStyles = makeStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.surface },
@@ -42,6 +46,7 @@ const useStyles = makeStyles((colors) => ({
   pad: { paddingHorizontal: 32, paddingTop: 8 },
   padRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
   key: { width: 76, height: 76, borderRadius: 38, alignItems: "center", justifyContent: "center", backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border },
+  keyOk: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
   keyText: { fontFamily: fonts.mono, fontSize: 26, color: colors.onSurface },
   serverBtn: { position: "absolute", right: 12, width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
   serverHint: { fontFamily: fonts.text, fontSize: 12, color: colors.muted, lineHeight: 17, marginBottom: 12 },
@@ -58,42 +63,65 @@ export default function PinScreen() {
   const [busy, setBusy] = useState(false);
   const [serverOpen, setServerOpen] = useState(false);
   const [serverInput, setServerInput] = useState("");
+  // length of the PIN that last logged in successfully → auto-submit at that length (else user taps ✓)
+  const [knownLen, setKnownLen] = useState<number | null>(null);
   const shake = useSharedValue(0);
   const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shake.value }] }));
+
+  useEffect(() => {
+    storage.getItem<number | null>(PIN_LEN_KEY, null).then((v) => setKnownLen(v && v >= PIN_MIN && v <= PIN_MAX ? v : null));
+  }, []);
+
+  const submit = useCallback(
+    (value: string) => {
+      if (value.length < PIN_MIN || busy) return;
+      setBusy(true);
+      login(value)
+        .then(() => {
+          setKnownLen(value.length);
+          void storage.setItem(PIN_LEN_KEY, value.length);
+        })
+        .catch((e: Error) => {
+          setError(e.message || "Galat PIN");
+          shake.value = withSequence(withTiming(-10, { duration: 50 }), withTiming(10, { duration: 50 }), withTiming(-6, { duration: 50 }), withTiming(0, { duration: 50 }));
+          setPin("");
+        })
+        .finally(() => setBusy(false));
+    },
+    [busy, login, shake],
+  );
 
   const press = useCallback(
     (k: string) => {
       if (busy) return;
       setError("");
       if (k === "del") return setPin((p) => p.slice(0, -1));
-      setPin((p) => (p.length < 4 ? p + k : p));
+      if (k === "ok") return submit(pin);
+      setPin((p) => (p.length < PIN_MAX ? p + k : p));
     },
-    [busy],
+    [busy, pin, submit],
   );
 
-  // Desktop/web: physical keyboard types the PIN
+  // Desktop/web: physical keyboard types the PIN, Enter submits
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined" || !ready || authed) return;
     const onKey = (e: KeyboardEvent) => {
       if (serverOpen) return;
       if (/^[0-9]$/.test(e.key)) press(e.key);
       else if (e.key === "Backspace") press("del");
+      else if (e.key === "Enter") press("ok");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [press, serverOpen, ready, authed]);
 
+  // auto-submit when the PIN reaches the remembered length (or the maximum)
   useEffect(() => {
-    if (pin.length !== 4 || busy) return;
-    setBusy(true);
-    login(pin)
-      .catch((e: Error) => {
-        setError(e.message || "Galat PIN");
-        shake.value = withSequence(withTiming(-10, { duration: 50 }), withTiming(10, { duration: 50 }), withTiming(-6, { duration: 50 }), withTiming(0, { duration: 50 }));
-        setPin("");
-      })
-      .finally(() => setBusy(false));
-  }, [pin, busy, login, shake]);
+    if (busy || !pin) return;
+    if (pin.length === PIN_MAX || (knownLen !== null && pin.length === knownLen)) submit(pin);
+  }, [pin, busy, knownLen, submit]);
+
+  const slots = Math.max(knownLen ?? PIN_MIN, pin.length, PIN_MIN);
 
   if (!ready) {
     return (
@@ -115,31 +143,39 @@ export default function PinScreen() {
           <Text style={styles.tagline}>Aapka personal WhatsApp munim</Text>
           <Text style={styles.prompt}>Enter PIN</Text>
           <Animated.View style={[styles.dots, shakeStyle]} testID="pin-dots">
-            {[0, 1, 2, 3].map((i) => (
+            {Array.from({ length: slots }, (_, i) => (
               <View key={i} style={[styles.dot, i < pin.length && styles.dotOn]} />
             ))}
           </Animated.View>
-          <Text style={styles.error} testID="pin-error">
-            {busy ? "Checking..." : error}
+          <Text style={[styles.error, !error && !busy && { color: colors.muted }]} testID="pin-error">
+            {busy ? "Checking..." : error || (knownLen === null && pin.length >= PIN_MIN ? "PIN poora ho gaya? ✓ dabao" : "")}
           </Text>
         </View>
         <View style={styles.pad}>
           {[0, 1, 2, 3].map((r) => (
             <View key={r} style={styles.padRow}>
-              {KEYS.slice(r * 3, r * 3 + 3).map((k, i) =>
-                k === "" ? (
-                  <View key={`e${i}`} style={{ width: 76 }} />
-                ) : (
-                  <Pressable
-                    key={k}
-                    testID={`pin-key-${k}`}
-                    onPress={() => press(k)}
-                    style={({ pressed }) => [styles.key, pressed && { backgroundColor: colors.surfaceTertiary }]}
-                  >
-                    {k === "del" ? <Icon name="delete" size={24} color={colors.onSurface} /> : <Text style={styles.keyText}>{k}</Text>}
-                  </Pressable>
-                ),
-              )}
+              {KEYS.slice(r * 3, r * 3 + 3).map((k) => (
+                <Pressable
+                  key={k}
+                  testID={`pin-key-${k}`}
+                  onPress={() => press(k)}
+                  disabled={k === "ok" && pin.length < PIN_MIN}
+                  style={({ pressed }) => [
+                    styles.key,
+                    k === "ok" && styles.keyOk,
+                    k === "ok" && pin.length < PIN_MIN && { opacity: 0.35 },
+                    pressed && { backgroundColor: k === "ok" ? colors.brandSecondary : colors.surfaceTertiary },
+                  ]}
+                >
+                  {k === "del" ? (
+                    <Icon name="delete" size={24} color={colors.onSurface} />
+                  ) : k === "ok" ? (
+                    <Icon name="check" size={26} color={colors.onBrandPrimary} />
+                  ) : (
+                    <Text style={styles.keyText}>{k}</Text>
+                  )}
+                </Pressable>
+              ))}
             </View>
           ))}
         </View>

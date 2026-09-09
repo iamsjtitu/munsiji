@@ -284,6 +284,7 @@ export default function LedgerScreen() {
               <Text style={styles.source}>
                 {item.source === "whatsapp" ? "via WhatsApp" : item.source === "simulate" ? "via test chat" : "manual"}
                 {item.via ? ` · ${isAccount ? "↔" : "from"} ${item.via}` : ""}
+                {item.tags?.length ? ` · ${item.tags.map((t) => `#${t}`).join(" ")}` : ""}
               </Text>
             </View>
             <View style={colAmt}>

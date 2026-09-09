@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 9 — Cash Transfer + Long PIN + Expense Tags/Categories. Backend: 24/24 new tests pass in /app/backend/tests/test_transfers_tags.py covering (1) POST /api/transfers bank↔cash with correct contra_txn_id + balance deltas, invalid same/xyz kinds → 400, delete-one-side removes both and restores balances, PATCH amount syncs the linked side; (2) POST /api/transactions on Cash ledger with mode='bank' books contra in Bank, mode='cash' (same kind) → NO contra, mode='none' → NO contra; (3) Bot flow via /api/whatsapp/simulate: 'bank se 2000 cash nikala' → 'Transfer:' reply with 'Bank → Cash' and per-account 'Cash:'/'Bank:' lines, cash+2000/bank−2000; '1000 cash bank me jama kiya' → Cash→Bank; 'last entry delete karo' undoes the pair; ai_parser.fallback_parse('bank se 5000 cash nikala') returns transfer bank→cash; (4) Tag normalization: POST tags=['Petrol','#staff','petrol'] → response ['petrol','staff'] (lowercased, deduped, # stripped) and the Cash contra row has the same tags; PATCH tags=['bijli'] updates txn AND contra; GET /api/tags returns used with count≥1 and suggested tags (petrol/staff/rent/…) with count 0 when unused; statement rows include tags field; (5) GET /api/summary/monthly?month=YYYY-MM returns categories[] sorted with 'bijli' out≥300, count=1 (NOT double-counted from contra) and a '(no tag)' bucket; bot 'diesel 400 diya' includes '#petrol' in reply and stores tags=['petrol']; (6) Bot 'naya' confirm fix — after fuzzy match on a very dissimilar typo (Karnitrix vs Xrgnifox) the bot asks 'Usme add karu? (haan) ya naya ledger banau? (naya)', reply to 'naya' creates 'Naya ledger bana' (does NOT emit 'Abhi koi sawaal pending nahi hai'); replying 'haan' books the entry on the base ledger. Regression: backend_test.py+test_cashbook.py 35/36 pass — the single failure test_simulate_flow_ai is a pre-existing flake documented in iteration_8 (stale TESTPARTY_* ledgers causing fuzzy-match confirm on new entries); I cleaned 3 stale TESTPARTY_* + TGTEST_* ledgers post-run. FRONTEND (desktop 1440x900): PIN screen fully verified — 4 dots + keypad + green ✓ (pin-key-ok) dimmed until 4 digits typed; typing 3 digits then ✓ does not submit; hint 'PIN poora ho gaya? ✓ dabao' appears on fresh visit at 4 digits; ✓ (or Enter) logs in to Home; after logout via sidebar-logout the second attempt AUTO-submits after 4 digits (remembered length) → Home; wrong PIN '1111' + ✓ shows 'Galat PIN' and 4 empty dots remain; typing 8 digits auto-submits with 'Galat PIN' error. FRONTEND SUMMARY (desktop): summary-screen loads but data-testid='summary-categories' element renders count=0 on the page — the Card with testID summary-categories in /app/frontend/app/(app)/summary.tsx:120 is NOT visible for the current month (likely wrapped in a conditional or hidden by a null d?.categories path). This blocks visual verification of the 'Kharcha kahan gaya' section. TxnForm entry-form testIDs were not exercised end-to-end via UI (Playwright strict-mode collision on 'Investment' text — 3 matches — prevented navigation to Biki [Mill]) but the components exist in code (txn-tag-petrol/staff/bijli/rent, txn-tag-input, txn-tag-add, txn-mode + cash/bank/none/keep, txn-submit-button, txn-delete-button — all present in TxnForm.tsx).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "backend/tests/backend_test.py::test_simulate_flow_ai", "issue": "Pre-existing flake (documented in iteration_8). Not caused by iter-9 features. Fuzzy match hits stale TESTPARTY_* ledgers and returns a 'confirm_match' clarify reply instead of adding the entry. Fix: add a session-scoped cleanup fixture that deletes TESTPARTY_* at teardown (like test_cashbook.py does with CBTEST_* and test_transfers_tags.py does with TGTEST_*)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "SummaryScreen", "issue": "The 'Kharcha kahan gaya' section (Card with testID='summary-categories') does NOT render on the Summary page for the current month even though summary-screen loads. Element count via querySelector = 0. This likely means the section is gated on d?.categories?.length > 0 or a similar truthy check that is failing (backend returns categories with at least '(no tag)' bucket, verified). Reference: /app/frontend/app/(app)/summary.tsx:120.", "testID": "summary-categories", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "shadow* style props", "issue": "Deprecation warning still emitted on every render: '\"shadow*\" style props are deprecated. Use \"boxShadow\".' Non-blocking (carry-over from iteration_8)."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_transfers_tags.py",
+    "/app/test_reports/pytest/pytest_transfers_tags.xml",
+    "/app/test_reports/pytest/pytest_regression_iter9.xml"
+  ],
+  "action_items": [
+    "Fix Summary UI: the 'Kharcha kahan gaya' Card (testID=summary-categories) is not rendering. Check the render gate in /app/frontend/app/(app)/summary.tsx around line 120 (the wrapping conditional / empty-state / dev-only-flag). Backend GET /api/summary/monthly returns a valid categories[] array with the '(no tag)' bucket in the current month; the frontend must render the card whenever d?.categories exists.",
+    "(Optional/Regression) Clean up stale TESTPARTY_* ledgers at the end of backend_test.py::test_simulate_flow_ai to remove the pre-existing flake."
+  ],
+  "critical_code_review_comments": [
+    "server.py:534-541 (post_transfer): correctly validates ACCOUNT_KINDS + distinct kinds and returns {txn, from, to} with fresh balances. Response passed frontend-friendly api() shape.",
+    "server.py:527 (post_transaction): mode is dropped when the target ledger is a money account AND mode==ledger.kind → prevents self-contra when a user picks 'Cash (same)' on the Cash ledger. Good.",
+    "ledger_service.py:38-45 (normalize_tags): lowercases, strips '#', dedups, caps at 5 and 24 chars — matches contract; contra reuses txn.tags in _book_contra so tags propagate automatically.",
+    "ledger_service.py:264-270 (transfer): implements the transfer as a debit on the TO account with mode=from_kind — reuses the generic contra path. Symmetric and correct.",
+    "server.py:627-642 (monthly_summary categories): correctly skips the auto-booked account side (is_acct and contra_txn_id) so tagged party debits are counted only once; money_out logic flips for money-accounts. Verified: bijli count=1, not 2.",
+    "bot.py:145-164 (do_transfer): parses/repairs from_account/to_account from text if AI omitted, formats reply as 'Transfer: ₹X FROM → TO' with per-account balance lines. Note: the reply always uses natural direction and does not need the # tags because transfers carry no tags."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_transfers_tags.py (new — 24 tests: transfers, account-entry-as-transfer, bot transfer flow, fallback parser, tags normalize/propagate/GET, monthly categories, bot naya/haan)"
+  ],
+  "success_rate": {
+    "backend": "100% iter9 (24/24); 97% regression (35/36, pre-existing flake unrelated)",
+    "frontend": "PIN screen 100% (all 6 sub-scenarios verified); Summary categories section MISSING (0%); Entry-form + Cash ledger transfer UI not exercised end-to-end due to Playwright strict-mode collision, but testIDs are present in source (TxnForm.tsx renders txn-mode/txn-tag-*/txn-tag-input/txn-tag-add/txn-submit-button)."
+  },
+  "seed_data_creation": "Test module creates TGTEST_<hex> party ledgers (a few for tag+bot+confirm-match tests) and deletes them via DELETE /api/ledgers/{id} in a module-scoped autouse teardown. Also created/deleted several transfer transactions and one 'diesel 400 diya' AI entry (party ledger cleaned via teardown). Existing Cash / Bank / Biki [Mill] / Mantu are NOT touched. Additionally soft-deleted 3 stale TESTPARTY_* + TGTEST_* ledgers left over from prior iterations (5 txns) to reduce fuzzy-match flakes.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter-9 backend tests live at /app/backend/tests/test_transfers_tags.py — 7 classes: TestTransfers (7), TestAccountEntryAsTransfer (4), TestBotTransfer (3), TestFallbackParser (2), TestTags (4), TestSummaryCategories (2), TestBotConfirmMatch (2). Runs cleanly serially in ~60s. To reproduce Bot-confirm-match: use names with a very dissimilar prefix but same numeric suffix (e.g. 'TGTEST_Karnitrix_abcd' vs 'TGTEST_Xrgnifox_abcd') so fuzz_score falls in the 60..88 confirm range even after AI parsing. Frontend Summary-categories bug: querySelector('[data-testid=\"summary-categories\"]').length === 0 on desktop after login + Summary nav — backend returns valid categories including '(no tag)'. TxnForm testIDs to verify next round: txn-tag-petrol, txn-tag-staff, txn-tag-bijli, txn-tag-rent, txn-tag-input, txn-tag-add, txn-mode-keep (edit sheet only), txn-mode-cash, txn-mode-bank, txn-mode-none. On the Cash ledger the segmented should show 'Sirf yahan' + 'Bank se/Bank me' options (per review request).",
+  "rca_of_issue": "Summary categories missing on UI: backend /api/summary/monthly response DOES include categories[] (verified by TestSummaryCategories which asserts categories with the '(no tag)' bucket and 'bijli' out≥300). The frontend Card in /app/frontend/app/(app)/summary.tsx:120 must therefore be gated behind a wrong conditional — likely `d.categories.length` being falsy for the current month or the card being nested inside another block that renders only in a specific branch. Main agent should log d?.categories on that screen and check the render guard."
+}

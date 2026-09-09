@@ -29,6 +29,8 @@ const useStyles = makeStyles((colors) => ({
   meta: { fontFamily: fonts.text, fontSize: 12, color: colors.muted, marginTop: 2 },
   divider: { height: 1, backgroundColor: colors.divider, marginLeft: 16 },
   small: { fontFamily: fonts.mono, fontSize: 12 },
+  barTrack: { height: 4, borderRadius: 2, backgroundColor: colors.surfaceTertiary, marginTop: 6, marginBottom: 4, overflow: "hidden" },
+  barFill: { height: 4, borderRadius: 2, backgroundColor: colors.brandPrimary },
   deskBody: { padding: DESKTOP_PAD, gap: 28 },
   statsRow: { flexDirection: "row", gap: 16 },
   deskColumns: { flexDirection: "row", gap: 24, alignItems: "flex-start" },
@@ -114,6 +116,33 @@ export default function SummaryScreen() {
     </Card>
   ) : null;
 
+  const categoriesCard = d && d.categories.length > 0 ? (
+    <Card style={isDesktop ? undefined : { marginHorizontal: 16 }} testID="summary-categories">
+      {d.categories.map((c, i) => {
+        const maxOut = Math.max(...d.categories.map((x) => x.out), 1);
+        return (
+          <View key={c.tag}>
+            {i > 0 && <View style={styles.divider} />}
+            <View style={styles.row} testID={`summary-category-${c.tag.replace(/[^a-z0-9]/g, "")}`}>
+              <Icon name="tag" size={18} color={c.tag === "(no tag)" ? colors.muted : colors.onBrandTertiary} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.name}>{c.tag === "(no tag)" ? "Bina tag" : `#${c.tag}`}</Text>
+                <View style={styles.barTrack}>
+                  <View style={[styles.barFill, { width: `${Math.max(2, Math.round((c.out / maxOut) * 100))}%` }]} />
+                </View>
+                <Text style={styles.meta}>{c.count} entries</Text>
+              </View>
+              <View style={{ alignItems: "flex-end" }}>
+                <Text style={[styles.small, { color: colors.error }]}>Out {c.out.toLocaleString("en-IN")}</Text>
+                {c.in > 0 ? <Text style={[styles.small, { color: colors.success }]}>In {c.in.toLocaleString("en-IN")}</Text> : null}
+              </View>
+            </View>
+          </View>
+        );
+      })}
+    </Card>
+  ) : null;
+
   const states = (
     <>
       {q.isError ? (
@@ -157,12 +186,24 @@ export default function SummaryScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={[styles.section, styles.sectionDesk]}>By ledger</Text>
                 {ledgersCard}
+                {categoriesCard ? (
+                  <>
+                    <Text style={[styles.section, styles.sectionDesk, { marginTop: 24 }]}>Kharcha kahan gaya (categories)</Text>
+                    {categoriesCard}
+                  </>
+                ) : null}
               </View>
             </View>
           ) : accountsCard ? (
             <View>
               <Text style={[styles.section, styles.sectionDesk]}>Cash / Bank</Text>
               {accountsCard}
+              {categoriesCard ? (
+                <>
+                  <Text style={[styles.section, styles.sectionDesk, { marginTop: 24 }]}>Kharcha kahan gaya (categories)</Text>
+                  {categoriesCard}
+                </>
+              ) : null}
             </View>
           ) : null}
         </ScrollView>
@@ -195,6 +236,12 @@ export default function SummaryScreen() {
             <>
               <Text style={[styles.section, { marginTop: 24 }]}>Cash / Bank</Text>
               {accountsCard}
+            </>
+          ) : null}
+          {categoriesCard ? (
+            <>
+              <Text style={[styles.section, { marginTop: 24 }]}>Kharcha kahan gaya</Text>
+              {categoriesCard}
             </>
           ) : null}
         </ScrollView>

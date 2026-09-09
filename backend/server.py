@@ -26,6 +26,7 @@ from auth import check_lockout, current_owner, hash_pin, make_token, record_fail
 from bot import day_end, day_start, get_settings, handle_message, ist_datetime_for, public_base_url, save_export  # noqa: E402
 from db import client, db  # noqa: E402
 from ledger_service import (  # noqa: E402
+    TAG_WORDS,
     account_balances,
     add_transaction,
     create_ledger,
@@ -39,6 +40,7 @@ from ledger_service import (  # noqa: E402
     normalize,
     recalc_balance,
     statement,
+    transfer,
     update_transaction,
 )
 from models import ACCOUNT_KINDS, Group, Ledger, Settings, Transaction, WaMessage, now_utc  # noqa: E402
@@ -484,7 +486,16 @@ class TxnCreate(BaseModel):
     direction: str
     note: str = ""
     entry_date: Optional[str] = None
-    mode: Optional[str] = "cash"  # party entries: cash | bank | none (no money moved). Ignored for cash/bank ledgers.
+    mode: Optional[str] = "cash"  # party entries: cash | bank | none (no money moved). Account ledgers: the OTHER account kind = transfer.
+    tags: List[str] = []
+
+
+class TransferCreate(BaseModel):
+    from_kind: str  # cash | bank
+    to_kind: str
+    amount: float = Field(gt=0)
+    note: str = ""
+    entry_date: Optional[str] = None
 
 
 class TxnPatch(BaseModel):
@@ -494,6 +505,7 @@ class TxnPatch(BaseModel):
     entry_date: Optional[str] = None
     ledger_id: Optional[str] = None
     mode: Optional[str] = "keep"  # keep | cash | bank | none
+    tags: Optional[List[str]] = None
 
 
 @protected.get("/transactions")
@@ -512,11 +524,21 @@ async def post_transaction(body: TxnCreate):
     ledger = await get_ledger(body.ledger_id)
     if not ledger:
         raise HTTPException(404, "Ledger nahi mila")
-    mode = None if ledger.is_account or body.mode in (None, "none") else body.mode
+    mode = None if body.mode in (None, "none") or (ledger.is_account and body.mode == ledger.kind) else body.mode
     if mode not in (None, "cash", "bank"):
         raise HTTPException(400, "mode cash/bank/none")
-    t = await add_transaction(body.ledger_id, body.amount, body.direction, body.note.strip(), parse_entry_date(body.entry_date), "app", mode=mode)
+    t = await add_transaction(body.ledger_id, body.amount, body.direction, body.note.strip(), parse_entry_date(body.entry_date), "app", mode=mode, tags=body.tags)
     return t.api()
+
+
+@protected.post("/transfers")
+async def post_transfer(body: TransferCreate):
+    """Move money between own accounts (bank→cash / cash→bank); books a linked pair of entries."""
+    if body.from_kind not in ACCOUNT_KINDS or body.to_kind not in ACCOUNT_KINDS or body.from_kind == body.to_kind:
+        raise HTTPException(400, "from_kind/to_kind cash|bank aur alag hone chahiye")
+    txn, from_l, to_l = await transfer(body.from_kind, body.to_kind, body.amount, body.note.strip(), parse_entry_date(body.entry_date), "app")
+    from_l, to_l = await get_ledger(from_l.id), await get_ledger(to_l.id)
+    return {"txn": txn.api(), "from": from_l.api() if from_l else None, "to": to_l.api() if to_l else None}
 
 
 @protected.patch("/transactions/{txn_id}")
@@ -525,7 +547,7 @@ async def patch_transaction(txn_id: str, body: TxnPatch):
         raise HTTPException(404, "Ledger nahi mila")
     mode = body.mode if body.mode in ("keep", "cash", "bank") else None
     new = await update_transaction(txn_id, amount=body.amount, direction=body.direction, note=body.note,
-                                   entry_date=parse_entry_date(body.entry_date) if body.entry_date else None, ledger_id=body.ledger_id, mode=mode)
+                                   entry_date=parse_entry_date(body.entry_date) if body.entry_date else None, ledger_id=body.ledger_id, mode=mode, tags=body.tags)
     if not new:
         raise HTTPException(404, "Entry nahi mili")
     return Transaction.from_mongo(new).api()
@@ -536,6 +558,21 @@ async def delete_transaction_route(txn_id: str):
     if not await delete_transaction(txn_id):
         raise HTTPException(404, "Entry nahi mili")
     return {"ok": True}
+
+
+@protected.get("/tags")
+async def list_tags():
+    """Suggested + used expense tags with usage counts (for quick chips in the entry form)."""
+    rows = await db.transactions.aggregate([
+        {"$match": {"deleted_at": None, "tags": {"$exists": True, "$ne": []}}},
+        {"$unwind": "$tags"},
+        {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 40},
+    ]).to_list(40)
+    used = [{"tag": r["_id"], "count": r["count"]} for r in rows]
+    seen = {u["tag"] for u in used}
+    return used + [{"tag": t, "count": 0} for t in TAG_WORDS if t not in seen]
 
 
 # ------------------------------------------------------------------ dashboard & summary
@@ -587,6 +624,22 @@ async def monthly_summary(month: str):
     rows = await db.transactions.aggregate(pipeline).to_list(5000)
     ledgers = {str(l["_id"]): l for l in await db.ledgers.find({}).to_list(5000)}
     groups = {str(g["_id"]): g["name"] for g in await db.groups.find({}).to_list(500)}
+    # expense categories (tags): where the money actually went this month — party entries + direct account entries,
+    # skipping the auto-booked account side of a pair so nothing is counted twice
+    cat: dict = {}
+    async for t in db.transactions.find({"deleted_at": None, "entry_date": {"$gte": start, "$lt": end}}, {"ledger_id": 1, "amount": 1, "direction": 1, "tags": 1, "contra_txn_id": 1}):
+        l = ledgers.get(t["ledger_id"])
+        if not l:
+            continue
+        is_acct = l.get("kind", "party") in ACCOUNT_KINDS
+        if is_acct and t.get("contra_txn_id"):
+            continue
+        money_out = (t["direction"] == "credit") if is_acct else (t["direction"] == "debit")
+        for tag in (t.get("tags") or ["(no tag)"]):
+            c = cat.setdefault(tag, {"tag": tag, "out": 0.0, "in": 0.0, "count": 0})
+            c["out" if money_out else "in"] = round(c["out" if money_out else "in"] + t["amount"], 2)
+            c["count"] += 1
+    categories = sorted(cat.values(), key=lambda c: (c["tag"] == "(no tag)", -c["out"]))
     by_group: dict = {}
     ledger_rows = []
     account_rows = []
@@ -611,7 +664,8 @@ async def monthly_summary(month: str):
     total_debit = round(sum(g["debit"] for g in by_group.values()), 2)
     total_credit = round(sum(g["credit"] for g in by_group.values()), 2)
     return {"month": month, "total_debit": total_debit, "total_credit": total_credit, "net": round(total_debit - total_credit, 2),
-            "groups": sorted(by_group.values(), key=lambda g: -(g["debit"] + g["credit"])), "ledgers": ledger_rows, "accounts": account_rows}
+            "groups": sorted(by_group.values(), key=lambda g: -(g["debit"] + g["credit"])), "ledgers": ledger_rows, "accounts": account_rows,
+            "categories": categories}
 
 
 # ------------------------------------------------------------------ settings

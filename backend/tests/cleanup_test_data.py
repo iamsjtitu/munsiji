@@ -15,10 +15,10 @@ from ledger_service import recalc_balance  # noqa: E402
 
 async def main():
     now = datetime.now(timezone.utc)
-    ids = [str(l["_id"]) async for l in db.ledgers.find({"deleted_at": None, "name": {"$regex": "^TEST"}})]
-    r = await db.ledgers.update_many({"deleted_at": None, "name": {"$regex": "^TEST"}}, {"$set": {"deleted_at": now}})
+    ids = [str(l["_id"]) async for l in db.ledgers.find({"deleted_at": None, "name": {"$regex": "^(TEST|CBTEST)"}})]
+    r = await db.ledgers.update_many({"deleted_at": None, "name": {"$regex": "^(TEST|CBTEST)"}}, {"$set": {"deleted_at": now}})
     r2 = await db.transactions.update_many({"ledger_id": {"$in": ids}, "deleted_at": None}, {"$set": {"deleted_at": now}})
-    r3 = await db.groups.update_many({"deleted_at": None, "name": {"$regex": "^TEST"}}, {"$set": {"deleted_at": now}})
+    r3 = await db.groups.update_many({"deleted_at": None, "name": {"$regex": "^(TEST|CBTEST)"}}, {"$set": {"deleted_at": now}})
     print("ledgers", r.modified_count, "txns", r2.modified_count, "groups", r3.modified_count)
     async for a in db.ledgers.find({"deleted_at": None}):
         bal = await recalc_balance(str(a["_id"]))

@@ -31,6 +31,7 @@ export type Transaction = {
   amount: number;
   direction: Direction;
   note: string;
+  tags: string[];
   entry_date: string;
   source: string;
   running_balance?: number;
@@ -165,4 +166,7 @@ export type MonthlySummary = {
     current_balance: number;
   }[];
   accounts: { ledger_id: string; ledger_name: string; kind: LedgerKind; in: number; out: number; net: number; count: number; current_balance: number }[];
+  categories: { tag: string; out: number; in: number; count: number }[];
 };
+
+export type TagCount = { tag: string; count: number };

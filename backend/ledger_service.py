@@ -18,6 +18,39 @@ BANK_WORDS = ("bank", "sbi", "hdfc", "icici", "axis", "pnb", "kotak", "bob", "ca
 BANK_MODE_WORDS = ("bank", "upi", "gpay", "google pay", "phonepe", "phone pe", "paytm", "neft", "imps", "rtgs", "cheque", "check", "chq", "online", "transfer", "net banking", "netbanking", "account se", "a/c", "acc se", "bhim")
 NO_MONEY_WORDS = ("opening balance", "opening bal", "op bal", "maal", "goods", "samaan", "saman", "bill", "invoice", "bori", "bag", "quintal", "kg", "ton", "bhada", "credit sale", "udhaar maal")
 
+# expense categories: canonical tag -> trigger words (Hinglish + English)
+TAG_WORDS = {
+    "petrol": ("petrol", "diesel", "fuel", "cng", "tel"),
+    "staff": ("salary", "staff", "wages", "mazdoori", "majdoori", "labour", "labor", "tankha", "advance salary"),
+    "bijli": ("bijli", "electricity", "electric", "light bill", "current bill", "power bill"),
+    "rent": ("rent", "kiraya", "bhada", "bhaada"),
+    "maal": ("maal", "goods", "purchase", "kharid", "stock", "samaan", "saman", "bori", "quintal"),
+    "transport": ("transport", "truck", "tempo", "gaadi bhada", "freight", "loading", "unloading", "courier"),
+    "khana": ("khana", "food", "chai", "nashta", "lunch", "dinner", "hotel", "tiffin"),
+    "repair": ("repair", "maintenance", "servicing", "mistri", "mechanic", "spare"),
+    "tax": ("tax", "gst", "tds", "challan", "fine"),
+    "byaj": ("interest", "byaj", "vyaj", "emi"),
+    "mobile": ("mobile", "recharge", "internet", "wifi", "phone bill"),
+    "personal": ("personal", "ghar", "home", "family", "shaadi", "gift", "medical", "doctor", "dawai", "school", "fees"),
+}
+
+
+def normalize_tags(tags) -> List[str]:
+    out: List[str] = []
+    for t in tags or []:
+        s = re.sub(r"[^a-z0-9\u0900-\u097F ]+", " ", str(t).lower().strip().lstrip("#"))
+        s = re.sub(r"\s+", " ", s).strip()
+        if s and s not in out:
+            out.append(s[:24])
+    return out[:5]
+
+
+def detect_tags(text: str, note: str = "") -> List[str]:
+    """Keyword fallback for expense categories when the AI didn't tag the entry."""
+    low = f" {text} {note} ".lower()
+    found = [tag for tag, words in TAG_WORDS.items() if any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", low) for w in words)]
+    return found[:3]
+
 
 def normalize(name: str) -> str:
     s = (name or "").lower()
@@ -202,14 +235,17 @@ async def add_transaction(
     wa_message_id: Optional[str] = None,
     sender: Optional[str] = None,
     mode: Optional[str] = None,
+    tags: Optional[List[str]] = None,
 ) -> Transaction:
-    """Record an entry. For PARTY ledgers, mode 'cash'/'bank' also books the contra entry in that money account
-    (party debit = money went out → account credit; party credit = money came in → account debit)."""
+    """Record an entry. mode 'cash'/'bank' also books the contra entry in that money account:
+    - PARTY ledger: party debit = money went out → account credit; party credit = money came in → account debit.
+    - ACCOUNT ledger (Cash/Bank) with mode = the OTHER account kind → transfer between own accounts."""
     txn = Transaction(
         ledger_id=ledger_id,
         amount=round(float(amount), 2),
         direction=direction,
         note=note or "",
+        tags=normalize_tags(tags),
         entry_date=entry_date,
         source=source,
         wa_message_id=wa_message_id,
@@ -220,9 +256,18 @@ async def add_transaction(
     await recalc_balance(ledger_id)
     if mode in ACCOUNT_KINDS:
         ledger = await get_ledger(ledger_id)
-        if ledger and not ledger.is_account:
+        if ledger and (not ledger.is_account or ledger.kind != mode):
             await _book_contra(txn, ledger, mode)
     return txn
+
+
+async def transfer(from_kind: str, to_kind: str, amount: float, note: str, entry_date: datetime, source: str,
+                   wa_message_id: Optional[str] = None, sender: Optional[str] = None) -> tuple[Transaction, Ledger, Ledger]:
+    """Move money between own accounts (bank→cash withdrawal, cash→bank deposit). Returns (in-side txn, from_ledger, to_ledger)."""
+    to_ledger = await get_account_ledger(to_kind)
+    txn = await add_transaction(to_ledger.id, amount, "debit", note, entry_date, source, wa_message_id=wa_message_id, sender=sender, mode=from_kind)
+    from_ledger = await get_account_ledger(from_kind)
+    return txn, from_ledger, to_ledger
 
 
 async def _book_contra(txn: Transaction, party: Ledger, mode: str) -> Transaction:
@@ -232,6 +277,7 @@ async def _book_contra(txn: Transaction, party: Ledger, mode: str) -> Transactio
         amount=txn.amount,
         direction=_opposite(txn.direction),
         note=f"{party.name}" + (f" — {txn.note}" if txn.note else ""),
+        tags=txn.tags,
         entry_date=txn.entry_date,
         source=txn.source,
         wa_message_id=txn.wa_message_id,
@@ -248,7 +294,8 @@ async def _book_contra(txn: Transaction, party: Ledger, mode: str) -> Transactio
 
 
 async def update_transaction(txn_id: str, amount: Optional[float] = None, direction: Optional[str] = None, note: Optional[str] = None,
-                             entry_date: Optional[datetime] = None, ledger_id: Optional[str] = None, mode: Optional[str] = "keep") -> Optional[dict]:
+                             entry_date: Optional[datetime] = None, ledger_id: Optional[str] = None, mode: Optional[str] = "keep",
+                             tags: Optional[List[str]] = None) -> Optional[dict]:
     """Edit an entry and keep its contra (cash/bank side) in sync. mode: 'keep' | 'cash' | 'bank' | None (remove contra)."""
     doc = await db.transactions.find_one({"_id": ObjectId(txn_id), "deleted_at": None})
     if not doc:
@@ -260,6 +307,8 @@ async def update_transaction(txn_id: str, amount: Optional[float] = None, direct
         upd["direction"] = direction
     if note is not None:
         upd["note"] = note.strip()
+    if tags is not None:
+        upd["tags"] = normalize_tags(tags)
     if entry_date is not None:
         upd["entry_date"] = entry_date
     if ledger_id and ledger_id != doc["ledger_id"]:
@@ -273,16 +322,16 @@ async def update_transaction(txn_id: str, amount: Optional[float] = None, direct
     ledger = await get_ledger(txn.ledger_id)
     contra_doc = await db.transactions.find_one({"_id": ObjectId(txn.contra_txn_id), "deleted_at": None}) if txn.contra_txn_id and ObjectId.is_valid(txn.contra_txn_id) else None
     contra_acct = await get_ledger(contra_doc["ledger_id"]) if contra_doc else None
-    if ledger and ledger.is_account:
-        mode = "keep"  # editing the cash/bank side: only sync, never create
+    if ledger and ledger.is_account and (mode == ledger.kind or (contra_doc and mode == "keep")):
+        mode = "keep"  # editing a money-account row: only sync the other side
     same_account = contra_acct is not None and mode in ACCOUNT_KINDS and contra_acct.kind == mode
     if contra_doc and (mode == "keep" or same_account):
-        c_upd = {"amount": txn.amount, "direction": _opposite(txn.direction), "entry_date": txn.entry_date, "updated_at": now_utc()}
+        c_upd = {"amount": txn.amount, "direction": _opposite(txn.direction), "entry_date": txn.entry_date, "tags": txn.tags, "updated_at": now_utc()}
         if ledger and not ledger.is_account:
             c_upd["note"] = ledger.name + (f" — {txn.note}" if txn.note else "")
         await db.transactions.update_one({"_id": contra_doc["_id"]}, {"$set": c_upd})
         await recalc_balance(contra_doc["ledger_id"])
-    elif mode in ACCOUNT_KINDS and ledger and not ledger.is_account:
+    elif mode in ACCOUNT_KINDS and ledger and (not ledger.is_account or ledger.kind != mode):
         if contra_doc:
             await _remove_contra(txn, contra_doc)
         await _book_contra(txn, ledger, mode)
