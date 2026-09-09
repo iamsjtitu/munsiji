@@ -10,6 +10,7 @@ import { Header, HeaderButton } from "@/src/components/Header";
 import { Icon } from "@/src/components/Icon";
 import { Money } from "@/src/components/Money";
 import { Sheet } from "@/src/components/Sheet";
+import { UpdateBanner } from "@/src/components/UpdateBanner";
 import { Button, Card, EmptyState, Field } from "@/src/components/ui";
 import { formatDate } from "@/src/format";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
@@ -110,6 +111,7 @@ export default function HomeScreen() {
         contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}
         ListHeaderComponent={
           <>
+            <UpdateBanner />
             <Animated.View entering={FadeInDown.duration(300)} style={styles.hero} testID="dashboard-card">
               <Text style={styles.heroLabel}>Overall</Text>
               <View style={styles.heroRow}>

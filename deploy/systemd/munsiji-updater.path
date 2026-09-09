@@ -1,0 +1,9 @@
+[Unit]
+Description=Munsiji: watch for update request written by the app
+
+[Path]
+PathExists=/opt/munsiji/data/updater/UPDATE_REQUESTED
+Unit=munsiji-updater.service
+
+[Install]
+WantedBy=multi-user.target

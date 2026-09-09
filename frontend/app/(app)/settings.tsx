@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Text, View } from "react-native";
+import { Switch, Text, View } from "react-native";
 import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -8,9 +8,11 @@ import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { Header } from "@/src/components/Header";
 import { Button, Card, Field, Segmented } from "@/src/components/ui";
-import { fonts, makeStyles } from "@/src/theme";
+import { useRequestUpdate, useUpdateDoneWatcher, useVersion } from "@/src/components/UpdateBanner";
+import { formatDate } from "@/src/format";
+import { fonts, makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
-import type { Settings } from "@/src/types";
+import { UPDATE_BUSY_STATES, type Settings } from "@/src/types";
 
 const useStyles = makeStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.surface },
@@ -19,7 +21,122 @@ const useStyles = makeStyles((colors) => ({
   hint: { fontFamily: fonts.text, fontSize: 12, color: colors.muted, lineHeight: 17, marginBottom: 12 },
   code: { fontFamily: fonts.mono, fontSize: 12, color: colors.onSurface, backgroundColor: colors.surfaceTertiary, padding: 10, borderRadius: 8, marginBottom: 12 },
   sticky: { padding: 16, backgroundColor: colors.surfaceSecondary, borderTopWidth: 1, borderTopColor: colors.border },
+  kv: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6 },
+  k: { fontFamily: fonts.text, fontSize: 13, color: colors.muted },
+  v: { fontFamily: fonts.mono, fontSize: 13, color: colors.onSurface, maxWidth: "60%", textAlign: "right" },
+  badge: { alignSelf: "flex-start", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, marginBottom: 12 },
+  badgeText: { fontFamily: fonts.text, fontSize: 12, fontWeight: "700" },
+  switchRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10 },
+  switchText: { fontFamily: fonts.text, fontSize: 14, color: colors.onSurface, flex: 1, paddingRight: 12 },
+  log: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary, backgroundColor: colors.surfaceTertiary, padding: 10, borderRadius: 8, marginTop: 12 },
+  btnRow: { flexDirection: "row", gap: 8, marginTop: 8 },
 }));
+
+function UpdatesCard() {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const version = useVersion();
+  const update = useRequestUpdate();
+  useUpdateDoneWatcher(version.data);
+  const [showLog, setShowLog] = useState(false);
+
+  const check = useMutation({
+    mutationFn: () => api.get("/system/version?force=true"),
+    onSuccess: (d) => {
+      qc.setQueryData(["system-version"], d);
+      toast.show("Check ho gaya", "success");
+    },
+    onError: (e: Error) => toast.show(e.message, "error"),
+  });
+  const autoUpdate = useMutation({
+    mutationFn: (enabled: boolean) => api.put("/system/auto-update", { enabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["system-version"] }),
+    onError: (e: Error) => toast.show(e.message, "error"),
+  });
+
+  const d = version.data;
+  if (!d || !d.supported) {
+    return (
+      <Card style={styles.card} testID="updates-card">
+        <Text style={styles.hint}>
+          Update feature sirf self-hosted VPS install pe kaam karta hai (repo ka deploy/install.sh). Emergent preview mein Emergent khud deploy karta hai.
+        </Text>
+      </Card>
+    );
+  }
+  const busy = UPDATE_BUSY_STATES.includes(d.status.state);
+  const badgeBg = busy ? colors.surfaceTertiary : d.status.state === "failed" ? colors.errorSoft : d.update_available ? colors.brandSecondary : colors.successSoft;
+  const badgeFg = busy ? colors.onSurfaceTertiary : d.status.state === "failed" ? colors.error : d.update_available ? colors.onBrandSecondary : colors.success;
+  const badgeText = busy ? `${d.status.message ?? "Update chal raha hai"}…` : d.status.state === "failed" ? "Last update fail hua" : d.update_available ? `${d.behind} naya commit available` : "Up to date";
+
+  return (
+    <Card style={styles.card} testID="updates-card">
+      <View style={[styles.badge, { backgroundColor: badgeBg }]}>
+        <Text style={[styles.badgeText, { color: badgeFg }]} testID="updates-status">
+          {badgeText}
+        </Text>
+      </View>
+      <View style={styles.kv}>
+        <Text style={styles.k}>Installed</Text>
+        <Text style={styles.v} numberOfLines={1} testID="updates-current">
+          {d.current.commit} · {d.current.message}
+        </Text>
+      </View>
+      <View style={styles.kv}>
+        <Text style={styles.k}>Installed on</Text>
+        <Text style={styles.v}>{d.current.date ? formatDate(d.current.date, "DD MMM YY, HH:mm") : "-"}</Text>
+      </View>
+      <View style={styles.kv}>
+        <Text style={styles.k}>Latest (GitHub · {d.branch})</Text>
+        <Text style={styles.v} numberOfLines={1} testID="updates-latest">
+          {d.latest.commit} · {d.latest.message}
+        </Text>
+      </View>
+      <View style={styles.btnRow}>
+        <Button testID="updates-check-button" title="Check karo" variant="secondary" icon="refresh-cw" onPress={() => check.mutate()} loading={check.isPending} style={{ flex: 1 }} />
+        <Button
+          testID="updates-update-button"
+          title={d.status.state === "failed" ? "Retry update" : "Update now"}
+          icon="download"
+          onPress={() => update.mutate()}
+          loading={update.isPending}
+          disabled={busy || (!d.update_available && d.status.state !== "failed")}
+          style={{ flex: 1 }}
+        />
+      </View>
+      <View style={styles.switchRow}>
+        <Text style={styles.switchText}>Auto-update (har 15 min GitHub check, naya commit → khud install)</Text>
+        <Switch testID="updates-auto-switch" value={d.auto_update} onValueChange={(v) => autoUpdate.mutate(v)} trackColor={{ true: colors.brandPrimary, false: colors.border }} />
+      </View>
+      <Button testID="updates-log-toggle" title={showLog ? "Log hide karo" : "Update log dekho"} variant="ghost" onPress={() => setShowLog((s) => !s)} />
+      {showLog ? (
+        <Text style={styles.log} selectable testID="updates-log">
+          {d.log.length ? d.log.join("\n") : "Abhi koi log nahi"}
+        </Text>
+      ) : null}
+    </Card>
+  );
+}
+
+function ServerCard() {
+  const styles = useStyles();
+  const toast = useToast();
+  const { serverUrl, defaultServerUrl, setServerUrl } = useAuth();
+  const [url, setUrl] = useState(serverUrl);
+  useEffect(() => setUrl(serverUrl), [serverUrl]);
+  return (
+    <Card style={styles.card} testID="server-card">
+      <Text style={styles.hint}>Ye app kis server se baat kare. Khaali = default ({defaultServerUrl || "same origin"}). Apne VPS ka URL daalo, e.g. https://munsiji.example.com — save ke baad dobara PIN login hoga.</Text>
+      <Field testID="server-url-input" label="Server URL" value={url} onChangeText={setUrl} placeholder={defaultServerUrl || "https://your-vps.com"} autoCapitalize="none" keyboardType="url" />
+      <View style={styles.btnRow}>
+        <Button testID="server-url-reset" title="Default" variant="secondary" onPress={() => void setServerUrl("").then(() => toast.show("Default server set", "success"))} style={{ flex: 1 }} />
+        <Button testID="server-url-save" title="Save & re-login" onPress={() => void setServerUrl(url).then(() => toast.show("Server URL save ho gaya", "success"))} disabled={url.trim() === serverUrl} style={{ flex: 1 }} />
+      </View>
+    </Card>
+  );
+}
 
 export default function SettingsScreen() {
   const styles = useStyles();
@@ -104,6 +221,10 @@ export default function SettingsScreen() {
           <Field testID="settings-new-pin" label="Naya PIN (4-6 digit)" value={newPin} onChangeText={setNewPin} keyboardType="number-pad" secureTextEntry maxLength={6} mono />
           <Button testID="settings-change-pin-button" title="PIN badlo" variant="secondary" icon="lock" onPress={() => changePin.mutate()} loading={changePin.isPending} disabled={oldPin.length < 4 || newPin.length < 4} />
         </Card>
+
+        <Text style={styles.section}>Server & Updates</Text>
+        <UpdatesCard />
+        <ServerCard />
 
         <Button testID="settings-logout-button" title="Logout" variant="ghost" icon="log-out" onPress={() => void logout()} />
       </KeyboardAwareScrollView>

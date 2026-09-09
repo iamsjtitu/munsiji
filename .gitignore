@@ -78,6 +78,9 @@ agenthub/agents/youtube/db
 
 memory/test_credentials.md
 
+# Self-host runtime data (VPS)
+/data/
+
 # Mobile development
 android-sdk/
 .env

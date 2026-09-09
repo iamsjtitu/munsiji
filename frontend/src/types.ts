@@ -70,6 +70,25 @@ export type Dashboard = {
   recent: Transaction[];
 };
 
+export type UpdateStatus = { state: "idle" | "requested" | "updating" | "building" | "restarting" | "done" | "failed"; message?: string; commit?: string; updated_at?: string };
+
+export type VersionInfo =
+  | { supported: false }
+  | {
+      supported: true;
+      branch: string;
+      current: { commit: string; message: string; date: string };
+      latest: { commit: string; message: string; date: string };
+      behind: number;
+      update_available: boolean;
+      checked_at: string;
+      status: UpdateStatus;
+      auto_update: boolean;
+      log: string[];
+    };
+
+export const UPDATE_BUSY_STATES = ["requested", "updating", "building", "restarting"];
+
 export type MonthlySummary = {
   month: string;
   total_debit: number;

@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 2 focused on the new self-host VPS + in-app updates feature. Backend: 9/9 pytest passed on /app/backend/tests/test_system_and_server.py — GET /api/system/version returns {supported:false} with auth; POST /api/system/update → 400 (self-hosted only); PUT /api/system/auto-update {enabled:true} → 400; all three return 401 without token. Regression smoke green: login PIN 3366, GET /api/groups, GET /api/dashboard. Frontend: 11/11 UI checkpoints passed on 390x844 web preview — PIN screen shows pin-server-button; opens server-sheet with pin-server-url-input; closes via sheet-close-button; login with 3366 → home; home has NO update-banner (correct for unsupported env); Settings → 'Server & Updates' section shows updates-card with 'sirf self-hosted VPS install' message and server-card with server-url-input/server-url-reset/server-url-save; entering https://invalid.example.invalid + Save & re-login correctly switched base URL, logged out, and returned to PIN screen; opening server sheet on PIN, clearing URL, and Save reset to default; login 3366 succeeded again and home rendered. Preview app URL restored to empty/default at test end. Only console warnings observed (shadow* and pointerEvents deprecations) — same as iteration 1, non-blocking.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "react-native-web shadow* props", "issue": "'shadow*' style props are deprecated. Use 'boxShadow' (RN-Web warning). Not a runtime error — same as iteration 1."},
+      {"component": "pointerEvents prop", "issue": "props.pointerEvents is deprecated. Use style.pointerEvents (RN-Web warning). Same as iteration 1."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_system_and_server.py",
+    "/app/test_reports/pytest/pytest_system.xml"
+  ],
+  "action_items": [
+    "No functional fixes required — the self-host VPS support and in-app update feature works end-to-end in the preview 'unsupported' mode as designed.",
+    "(Optional, carried over) Migrate remaining shadow* style props → boxShadow and pointerEvents prop → style.pointerEvents to silence RN-Web deprecation warnings."
+  ],
+  "critical_code_review_comments": [
+    "system.py: supported() gate is correct — REPO_DIR/.git + UPDATER_DIR required, so preview correctly returns {supported:false}.",
+    "server.py protected routes for /system/version, /system/update, /system/auto-update correctly enforce auth (401) and 400 on unsupported.",
+    "auth.tsx setServerUrl persists via storage, resets base URL, and calls logout() — verified in UI: after save the user is redirected to PIN and queryClient is cleared.",
+    "UpdateBanner.tsx correctly returns null when !supported → home never shows the banner in preview.",
+    "PIN screen server sheet (index.tsx) autoFocus + Field + Sheet integration works cleanly; sheet-close-button dismisses without saving."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_system_and_server.py (created)",
+    "/app/test_reports/pytest/pytest_system.xml (generated)",
+    "/app/test_reports/iteration_2.json (created)"
+  ],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100% (11/11 checkpoints)"},
+  "seed_data_creation": "None. Server URL was temporarily set to https://invalid.example.invalid then reset to empty/default at end of test — preview app remains usable.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "New test file /app/backend/tests/test_system_and_server.py covers /api/system/* (version/update/auto-update) + auth-required negative cases + smoke regression (login, groups, dashboard). Runs in ~2s. In preview env REPO_DIR/UPDATER_DIR are unset ⇒ version returns {supported:false}, update/auto-update return 400. Frontend flow verified end-to-end including runtime base-URL switch + logout + re-login after reset.",
+  "rca_of_issue": "N/A — feature works as specified."
+}

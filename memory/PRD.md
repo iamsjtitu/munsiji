@@ -18,6 +18,8 @@ Mobile App (Expo React Native + TypeScript) + FastAPI + MongoDB. WhatsApp bot (w
 ## Implemented (Sep 2026)
 - Phase 1–4 all delivered in MVP: schema, PIN auth, wa.9x adapter (configurable base URL / API key / paths), whitelist, dedupe, AI parsing + fuzzy match + confirm-on-similar, Hinglish replies with running balance, corrections (delete last / amount fix), back-dated entries, statements via WhatsApp (asks PDF/Excel if unspecified, supports date ranges), app screens, manual entry/edit/delete, merge/reassign, monthly summary, PDF/Excel/CSV export (+ send on WhatsApp), settings admin panel
 - Tested: iteration_1 — backend 24/24, frontend 20/20 pass
+- **Self-host VPS package (deploy/)**: one-command `install.sh` (Docker Compose: mongo + backend + Expo web build via nginx + Caddy auto-HTTPS), host-side updater (`update.sh` + systemd path unit triggered by app, 15-min auto-update timer behind AUTO_UPDATE flag), backend `/api/system/version|update|auto-update` (git-based, `REPO_DIR`/`UPDATER_DIR` env; unsupported → hidden in Emergent preview), Home update banner, Settings "Server & Updates" card (installed/latest commit, check, update now, auto-update switch, log), runtime Server URL override (PIN screen + Settings) so the same app build can point at the VPS. `deploy/README.md` = Hinglish guide. Tested iteration_2 — 9/9 backend, 11/11 frontend
+- Note: `deploy/requirements.txt` is a lean runtime list for the Docker image — add new backend deps there too
 
 ## Backlog
 - P1: Verify real wa.9x payload shape once user provides keys (send/doc endpoint field names may need adjusting in `wa_provider.py`)

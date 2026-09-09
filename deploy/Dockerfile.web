@@ -1,0 +1,19 @@
+# Builds the Expo web app (static) and serves it with nginx.
+FROM node:20-bookworm-slim AS build
+WORKDIR /app
+ENV CI=1 EXPO_NO_TELEMETRY=1 NODE_OPTIONS=--max-old-space-size=2048
+
+COPY frontend/package.json frontend/yarn.lock ./
+# preinstall hook is an Emergent dev-only guard; not needed in the image
+RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));delete p.scripts.preinstall;fs.writeFileSync('package.json',JSON.stringify(p,null,2))" \
+ && yarn install --frozen-lockfile --network-timeout 600000
+
+COPY frontend/ ./
+RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));delete p.scripts.preinstall;fs.writeFileSync('package.json',JSON.stringify(p,null,2))" \
+ && rm -f .env \
+ && EXPO_PUBLIC_BACKEND_URL="" npx expo export --platform web --output-dir dist
+
+FROM nginx:1.27-alpine
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80

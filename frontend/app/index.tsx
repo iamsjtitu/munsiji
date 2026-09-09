@@ -6,6 +6,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAuth } from "@/src/auth";
 import { Icon } from "@/src/components/Icon";
+import { Sheet } from "@/src/components/Sheet";
+import { Button, Field } from "@/src/components/ui";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 
 const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "del"];
@@ -25,16 +27,20 @@ const useStyles = makeStyles((colors) => ({
   padRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
   key: { width: 76, height: 76, borderRadius: 38, alignItems: "center", justifyContent: "center", backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border },
   keyText: { fontFamily: fonts.mono, fontSize: 26, color: colors.onSurface },
+  serverBtn: { position: "absolute", right: 12, width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+  serverHint: { fontFamily: fonts.text, fontSize: 12, color: colors.muted, lineHeight: 17, marginBottom: 12 },
 }));
 
 export default function PinScreen() {
   const styles = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const { ready, authed, login } = useAuth();
+  const { ready, authed, login, serverUrl, defaultServerUrl, setServerUrl } = useAuth();
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [serverOpen, setServerOpen] = useState(false);
+  const [serverInput, setServerInput] = useState("");
   const shake = useSharedValue(0);
   const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shake.value }] }));
 
@@ -104,6 +110,30 @@ export default function PinScreen() {
           </View>
         ))}
       </View>
+      <Pressable
+        testID="pin-server-button"
+        style={[styles.serverBtn, { top: insets.top + 8 }]}
+        onPress={() => {
+          setServerInput(serverUrl);
+          setServerOpen(true);
+        }}
+      >
+        <Icon name="server" size={20} color={colors.muted} />
+      </Pressable>
+      <Sheet visible={serverOpen} onClose={() => setServerOpen(false)} title="Server" testID="server-sheet">
+        <Text style={styles.serverHint}>Apne VPS ka URL daalo (e.g. https://munsiji.example.com). Khaali chhodo to default server use hoga{defaultServerUrl ? ` (${defaultServerUrl})` : ""}.</Text>
+        <Field testID="pin-server-url-input" label="Server URL" value={serverInput} onChangeText={setServerInput} placeholder={defaultServerUrl || "https://your-vps.com"} autoCapitalize="none" keyboardType="url" autoFocus />
+        <Button
+          testID="pin-server-url-save"
+          title="Save"
+          onPress={() =>
+            void setServerUrl(serverInput).then(() => {
+              setServerOpen(false);
+              setError("");
+            })
+          }
+        />
+      </Sheet>
     </View>
   );
 }

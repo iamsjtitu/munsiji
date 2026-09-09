@@ -1,0 +1,10 @@
+[Unit]
+Description=Munsiji: periodic auto-update check (only when AUTO_UPDATE is enabled in app Settings)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+Unit=munsiji-autoupdate.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Munsiji: auto-update if GitHub has new commits
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/munsiji
+ExecStart=/bin/bash /opt/munsiji/deploy/update.sh --if-changed
+TimeoutStartSec=1800

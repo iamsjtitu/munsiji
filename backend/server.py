@@ -32,6 +32,7 @@ from ledger_service import (  # noqa: E402
 )
 from models import Group, Ledger, Settings, Transaction, WaMessage, now_utc  # noqa: E402
 from wa_provider import ProviderNotConfigured, get_provider, parse_incoming  # noqa: E402
+import system  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -529,6 +530,32 @@ async def wa_status():
 async def clear_pending():
     await db.pending.delete_many({})
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ system (self-host updates)
+class AutoUpdateBody(BaseModel):
+    enabled: bool
+
+
+@protected.get("/system/version")
+async def system_version(force: bool = False):
+    return await system.version_info(force=force)
+
+
+@protected.post("/system/update")
+async def system_update():
+    if not system.supported():
+        raise HTTPException(400, "Update sirf self-hosted VPS install pe available hai")
+    if system.is_busy():
+        raise HTTPException(409, "Update already chal raha hai")
+    return system.request_update()
+
+
+@protected.put("/system/auto-update")
+async def system_auto_update(body: AutoUpdateBody):
+    if not system.supported():
+        raise HTTPException(400, "Sirf self-hosted VPS install pe available hai")
+    return {"auto_update": system.set_auto_update(body.enabled)}
 
 
 app.include_router(api)

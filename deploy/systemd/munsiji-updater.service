@@ -1,0 +1,10 @@
+[Unit]
+Description=Munsiji: pull latest code from GitHub, rebuild and restart
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/munsiji
+ExecStart=/bin/bash /opt/munsiji/deploy/update.sh
+TimeoutStartSec=1800

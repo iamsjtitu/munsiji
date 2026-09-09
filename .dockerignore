@@ -1,0 +1,15 @@
+**/node_modules
+**/.expo
+**/.metro-cache
+**/dist
+**/web-build
+**/__pycache__
+**/*.pyc
+.git
+data
+memory
+tests
+test_reports
+backend/.env
+frontend/.env
+.env

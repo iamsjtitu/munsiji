@@ -161,9 +161,13 @@ export function EmptyState({ icon, title, text, testID }: { icon: IconName; titl
   );
 }
 
-export function Card({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
+export function Card({ children, style, testID }: { children: React.ReactNode; style?: ViewStyle; testID?: string }) {
   const styles = useStyles();
-  return <View style={[styles.card, style]}>{children}</View>;
+  return (
+    <View style={[styles.card, style]} testID={testID}>
+      {children}
+    </View>
+  );
 }
 
 export function MenuRow({ icon, label, onPress, danger, testID }: { icon: IconName; label: string; onPress: () => void; danger?: boolean; testID: string }) {

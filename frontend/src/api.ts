@@ -1,7 +1,17 @@
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
+export const DEFAULT_BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? "";
 
+let baseUrl: string = DEFAULT_BASE_URL;
 let token: string | null = null;
 let unauthorizedHandler: (() => void) | null = null;
+
+// Runtime override so the same app build can talk to a self-hosted VPS.
+export function setBaseUrl(url: string | null) {
+  baseUrl = (url || DEFAULT_BASE_URL).replace(/\/+$/, "");
+}
+
+export function getBaseUrl() {
+  return baseUrl;
+}
 
 export function setToken(t: string | null) {
   token = t;
@@ -24,7 +34,7 @@ type Method = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${BASE}/api${path}`, {
+    res = await fetch(`${baseUrl}/api${path}`, {
       method,
       headers: {
         "Content-Type": "application/json",
