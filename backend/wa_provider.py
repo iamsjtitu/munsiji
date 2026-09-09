@@ -1,4 +1,5 @@
 """WhatsApp provider abstraction: MockProvider (logs to db) and Wa9xProvider (HTTP)."""
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -10,6 +11,9 @@ from db import db
 from models import Settings, now_utc
 
 logger = logging.getLogger(__name__)
+
+# api_key -> "v1" | "v2": which wa.9x API flavour accepted this key (avoids a wasted 401 round-trip on every send)
+_MODE_CACHE: dict[str, str] = {}
 
 
 @dataclass
@@ -111,62 +115,111 @@ class Wa9xProvider(WhatsAppProvider):
         if not self.s.wa9x_api_key:
             raise ProviderNotConfigured("wa.9x API key set nahi hai (Settings → WhatsApp)")
 
-    def _headers(self) -> dict:
-        return {
-            "X-API-Key": self.s.wa9x_api_key,
-            "Authorization": f"Bearer {self.s.wa9x_api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+    @property
+    def _mode(self) -> Optional[str]:
+        return _MODE_CACHE.get(self.s.wa9x_api_key)
 
-    async def _send(self, payload: dict) -> dict:
-        self._check()
+    def _remember(self, mode: str):
+        _MODE_CACHE[self.s.wa9x_api_key] = mode
+
+    def _client(self) -> httpx.AsyncClient:
+        # IPv4 only (many VPS have half-working IPv6 → ConnectError/ReadError to Cloudflare-fronted wa.9x) + connect retries
+        return httpx.AsyncClient(timeout=30, transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2))
+
+    async def _request(self, method: str, url: str, **kw) -> httpx.Response:
+        last: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                async with self._client() as client:
+                    return await client.request(method, url, **kw)
+            except httpx.HTTPError as e:  # network / timeout / reset — retry a couple of times
+                last = e
+                logger.warning("wa.9x %s %s failed (%s: %s) attempt %d", method, url, type(e).__name__, e, attempt + 1)
+                await asyncio.sleep(1.5 * (attempt + 1))
+        raise RuntimeError(f"wa.9x tak request nahi gayi ({type(last).__name__}: {str(last) or 'timeout/network'}) — VPS se {self.base} reachable hai? (IPv6/MTU check)") from last
+
+    @staticmethod
+    def _json(r: httpx.Response) -> dict:
+        try:
+            d = r.json() if r.text else {}
+        except ValueError:
+            d = {"raw": r.text[:300]}
+        return d if isinstance(d, dict) else {"data": d}
+
+    # --- v1 (Modern JSON API): X-API-Key ---------------------------------------------------------
+    async def _send_v1(self, to: str, text: str, media_url: str = "") -> httpx.Response:
+        payload: dict = {"to": to, "text": text}
+        if media_url:
+            payload.update(media_url=media_url, caption=text)
         if self.s.wa9x_instance_id:
             payload["session_id"] = self.s.wa9x_instance_id
-        url = f"{self.base}/v1/messages"
-        try:
-            async with httpx.AsyncClient(timeout=25) as client:
-                r = await client.post(url, json=payload, headers=self._headers())
-        except httpx.HTTPError as e:
-            await db.wa_outbox.insert_one({"to": payload.get("to"), "type": "text", "payload": payload, "status": "failed", "response": f"{type(e).__name__}: {e}", "created_at": now_utc()})
-            raise RuntimeError(f"wa.9x tak request nahi gayi ({type(e).__name__}: {str(e) or 'timeout/network'}) — VPS se {self.base} reachable hai?") from e
-        try:
-            data = r.json() if r.text else {}
-        except ValueError:
-            data = {"raw": r.text[:300]}
-        status = str(data.get("status") or "").lower() if isinstance(data, dict) else ""
-        err = data.get("error") if isinstance(data, dict) else None
-        ok = 200 <= r.status_code < 300 and not err and (status in ("sent", "queued", "scheduled", "delivered", "") or data.get("success") is True)
+        return await self._request("POST", f"{self.base}/v1/messages", json=payload, headers={"X-API-Key": self.s.wa9x_api_key, "Accept": "application/json"})
+
+    # --- v2 (360messenger-compatible): Authorization: Bearer, multipart form -----------------------
+    async def _send_v2(self, to: str, text: str, media_url: str = "") -> httpx.Response:
+        form = {"phonenumber": to, "text": text}
+        if media_url:
+            form["url"] = media_url
+        return await self._request("POST", f"{self.base}/v2/sendMessage", data=form, headers={"Authorization": f"Bearer {self.s.wa9x_api_key}", "Accept": "application/json"})
+
+    @staticmethod
+    def _ok(r: httpx.Response, d: dict) -> bool:
+        if not (200 <= r.status_code < 300) or d.get("error"):
+            return False
+        status = str(d.get("status") or "").lower()
+        return d.get("success") is True or status in ("sent", "queued", "scheduled", "delivered", "")
+
+    async def _send(self, to: str, text: str, media_url: str = "") -> dict:
+        """Try v1 (X-API-Key). If the key is rejected (401), try v2 (Bearer) — wa.9x issues account keys and per-service keys."""
+        self._check()
+        order = ["v2", "v1"] if self._mode == "v2" else ["v1", "v2"]
+        r = d = None
+        for mode in order:
+            r = await (self._send_v1 if mode == "v1" else self._send_v2)(to, text, media_url)
+            d = self._json(r)
+            if r.status_code in (401, 403):
+                continue  # key not valid for this API flavour → try the other
+            self._remember(mode)
+            break
+        ok = r is not None and r.status_code not in (401, 403) and self._ok(r, d or {})
         await db.wa_outbox.insert_one(
-            {"to": payload.get("to"), "type": "document" if payload.get("media_url") else "text", "payload": {k: v for k, v in payload.items()},
-             "status": "sent" if ok else "failed", "http_status": r.status_code, "response": r.text[:500], "created_at": now_utc()}
+            {"to": to, "type": "document" if media_url else "text", "payload": {"to": to, "text": text, "media_url": media_url or None},
+             "status": "sent" if ok else "failed", "http_status": r.status_code if r is not None else None, "response": (r.text[:500] if r is not None else ""), "created_at": now_utc()}
         )
         if not ok:
-            detail = err or (data.get("detail") if isinstance(data, dict) else None) or r.text[:200]
-            raise RuntimeError(f"wa.9x {r.status_code}: {detail}")
-        return data
+            if r is not None and r.status_code in (401, 403):
+                raise RuntimeError("wa.9x ne API key reject ki (401, v1 aur v2 dono) — wa.9x dashboard → Settings → 'API key' (Copy) dobara paste karo; poori key wa9x_ se shuru hoti hai")
+            detail = (d or {}).get("error") or (d or {}).get("detail") or (r.text[:200] if r is not None else "no response")
+            raise RuntimeError(f"wa.9x {r.status_code if r is not None else ''}: {detail}")
+        return d or {}
 
     async def send_text(self, to: str, text: str) -> dict:
-        return await self._send({"to": digits(to), "text": text})
+        return await self._send(digits(to), text)
 
     async def send_document(self, to: str, url: str, filename: str, caption: str = "") -> dict:
-        return await self._send({"to": digits(to), "media_url": url, "caption": caption or filename, "text": caption or filename})
+        return await self._send(digits(to), caption or filename, media_url=url)
 
     async def sessions(self) -> tuple[list, str]:
-        """GET /api/v1/sessions → ([{id, name, status, phone}], raw_text) — used by the in-app connection check."""
+        """Connection check: v1 GET /sessions (X-API-Key) → [{id,name,status,phone}]; if key is v2-only → GET /v2/account (Bearer)."""
         self._check()
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.get(f"{self.base}/v1/sessions", headers=self._headers())
+        r = await self._request("GET", f"{self.base}/v1/sessions", headers={"X-API-Key": self.s.wa9x_api_key, "Accept": "application/json"})
         if r.status_code in (401, 403):
-            raise RuntimeError("wa.9x ne API key reject ki (401) — Settings mein sahi X-API-Key daalo (wa9x_... se shuru)")
+            r2 = await self._request("GET", f"{self.base}/v2/account", headers={"Authorization": f"Bearer {self.s.wa9x_api_key}", "Accept": "application/json"})
+            if r2.status_code in (401, 403):
+                raise RuntimeError("wa.9x ne API key reject ki (401, v1 aur v2 dono) — wa.9x dashboard → Settings → 'API key' Copy karke dobara paste karo")
+            if r2.status_code >= 300:
+                raise RuntimeError(f"wa.9x {r2.status_code}: {r2.text[:200]}")
+            self._remember("v2")
+            d = self._json(r2)
+            res = d.get("result") if isinstance(d.get("result"), dict) else d
+            return [{"id": "v2", "name": res.get("email") or "wa.9x account (v2 key)", "status": f"{res.get('sessions', '?')} session(s) linked", "phone": None}], r2.text[:400]
         if r.status_code >= 300:
             raise RuntimeError(f"wa.9x {r.status_code}: {r.text[:200]}")
-        try:
-            data = r.json()
-        except ValueError:
-            return [], r.text[:400]
+        self._remember("v1")
+        d = self._json(r)
+        data = d.get("data") if "data" in d else (d.get("sessions") or d.get("result") or d.get("items") or [])
         if isinstance(data, dict):
-            data = data.get("sessions") or data.get("result") or data.get("data") or data.get("items") or []
+            data = data.get("sessions") or data.get("items") or []
         return (data if isinstance(data, list) else []), r.text[:400]
 
 
