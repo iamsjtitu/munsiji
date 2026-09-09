@@ -69,7 +69,7 @@ const useStyles = makeStyles((colors) => ({
   linkText: { flex: 1, fontFamily: fonts.text, fontSize: 14, color: colors.onBrandTertiary, fontWeight: "600" },
 }));
 
-type SheetMode = null | "add" | "edit" | "export" | "menu" | "rename" | "move" | "merge";
+type SheetMode = null | "add" | "edit" | "export" | "menu" | "rename" | "move" | "merge" | "kind";
 type ExportFormat = "pdf" | "excel" | "csv";
 
 export default function LedgerScreen() {
@@ -110,10 +110,12 @@ export default function LedgerScreen() {
 
   const stmt = stmtQuery.data;
   const ledger = stmt?.ledger;
+  const kind = ledger?.kind ?? "party";
+  const isAccount = kind === "cash" || kind === "bank";
   const groupName = groups.data?.find((g) => g.id === ledger?.group_id)?.name ?? "";
 
   const invalidateAll = () => {
-    qc.invalidateQueries({ queryKey: ["statement", id] });
+    qc.invalidateQueries({ queryKey: ["statement"] }); // also refreshes the linked Cash/Bank statement
     qc.invalidateQueries({ queryKey: ["ledgers"] });
     qc.invalidateQueries({ queryKey: ["groups"] });
     qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -214,7 +216,7 @@ export default function LedgerScreen() {
         <View style={[styles.balanceBar, padX]}>
           <View>
             <Text style={styles.balLabel}>{month === "all" ? "Current balance" : "Closing balance"}</Text>
-            <Money testID="ledger-balance" value={stmt?.closing_balance ?? ledger?.current_balance ?? 0} size={isDesktop ? 30 : 26} showLabel />
+            <Money testID="ledger-balance" value={stmt?.closing_balance ?? ledger?.current_balance ?? 0} size={isDesktop ? 30 : 26} showLabel kind={ledger?.kind ?? "party"} />
           </View>
           {!isDesktop ? (
             <View style={styles.actions}>
@@ -234,7 +236,7 @@ export default function LedgerScreen() {
         <View style={[styles.tableHead, padX]}>
           <Text style={[styles.th, ...colDate]}>Date</Text>
           <Text style={[styles.th, styles.colPart]}>Particulars</Text>
-          <Text style={[styles.th, ...colAmt, { textAlign: "right" }]}>Dr / Cr</Text>
+          <Text style={[styles.th, ...colAmt, { textAlign: "right" }]}>{isAccount ? "In / Out" : "Dr / Cr"}</Text>
           <Text style={[styles.th, ...colBal, { textAlign: "right" }]}>Balance</Text>
         </View>
       </Header>
@@ -277,13 +279,16 @@ export default function LedgerScreen() {
             </View>
             <View style={styles.colPart}>
               <Text style={styles.particulars} numberOfLines={2}>
-                {item.note || (item.direction === "debit" ? "Diya" : "Mila")}
+                {item.note || (isAccount ? (item.direction === "debit" ? "Jama" : "Nikla") : item.direction === "debit" ? "Diya" : "Mila")}
               </Text>
-              <Text style={styles.source}>{item.source === "whatsapp" ? "via WhatsApp" : item.source === "simulate" ? "via test chat" : "manual"}</Text>
+              <Text style={styles.source}>
+                {item.source === "whatsapp" ? "via WhatsApp" : item.source === "simulate" ? "via test chat" : "manual"}
+                {item.via ? ` · ${isAccount ? "↔" : "from"} ${item.via}` : ""}
+              </Text>
             </View>
             <View style={colAmt}>
-              <Money value={item.amount} tone={item.direction} size={isDesktop ? 15 : 14} />
-              <Text style={styles.drcr}>{item.direction === "debit" ? "Dr" : "Cr"}</Text>
+              <Money value={item.amount} tone={isAccount ? (item.direction === "debit" ? "credit" : "debit") : item.direction} size={isDesktop ? 15 : 14} />
+              <Text style={styles.drcr}>{isAccount ? (item.direction === "debit" ? "In" : "Out") : item.direction === "debit" ? "Dr" : "Cr"}</Text>
             </View>
             <View style={colBal}>
               <Money value={item.running_balance ?? 0} size={isDesktop ? 15 : 14} colored={false} />
@@ -309,12 +314,13 @@ export default function LedgerScreen() {
         </Pressable>
       ) : null}
 
-      <Sheet visible={mode === "add"} onClose={() => setMode(null)} title="Manual Entry" testID="add-txn-sheet">
-        <TxnForm onSubmit={(v) => addTxn.mutate(v)} submitting={addTxn.isPending} />
+      <Sheet visible={mode === "add"} onClose={() => setMode(null)} title={isAccount ? `${ledger?.name} Entry` : "Manual Entry"} testID="add-txn-sheet">
+        <TxnForm kind={kind} onSubmit={(v) => addTxn.mutate(v)} submitting={addTxn.isPending} />
       </Sheet>
 
       <Sheet visible={mode === "edit"} onClose={() => setMode(null)} title="Entry Edit" testID="edit-txn-sheet">
-        {editing ? <TxnForm initial={editing} onSubmit={(v) => editTxn.mutate(v)} onDelete={() => delTxn.mutate()} submitting={editTxn.isPending || delTxn.isPending} /> : null}
+        {editing ? <TxnForm kind={kind} initial={editing} onSubmit={(v) => editTxn.mutate(v)} onDelete={() => delTxn.mutate()} submitting={editTxn.isPending || delTxn.isPending} /> : null}
+        {editing?.via ? <Text style={styles.hint}>Ye entry {editing.via} se linked hai — delete karne pe wahan se bhi hat jaayegi.</Text> : null}
       </Sheet>
 
       <Sheet visible={mode === "export"} onClose={() => setMode(null)} title="Statement Export" testID="export-sheet">
@@ -357,6 +363,13 @@ export default function LedgerScreen() {
         <MenuRow icon="folder" label="Group change karo" testID="ledger-move-option" onPress={() => setMode("move")} />
         <Divider />
         <MenuRow
+          icon={isAccount ? "user" : "wallet"}
+          label={isAccount ? "Party ledger banao (Cash/Bank nahi)" : "Ye Cash/Bank account hai"}
+          testID="ledger-kind-option"
+          onPress={() => setMode("kind")}
+        />
+        <Divider />
+        <MenuRow
           icon="git-merge"
           label="Dusre ledger mein merge karo"
           testID="ledger-merge-option"
@@ -372,6 +385,22 @@ export default function LedgerScreen() {
       <Sheet visible={mode === "rename"} onClose={() => setMode(null)} title="Rename Ledger" testID="rename-ledger-sheet">
         <Field testID="ledger-rename-input" label="Naya naam" value={newName} onChangeText={setNewName} autoFocus />
         <Button testID="ledger-rename-save" title="Save" onPress={() => patchLedger.mutate({ name: newName })} loading={patchLedger.isPending} disabled={!newName.trim()} />
+      </Sheet>
+
+      <Sheet visible={mode === "kind"} onClose={() => setMode(null)} title="Ledger ka type" testID="ledger-kind-sheet">
+        <Text style={styles.hint}>
+          Party = insaan/firm (lena hai / dena hai). Cash / Bank = aapka paisa jahan rakha hai — party entries ka paisa automatically yahan se jud/kat jaata hai.
+        </Text>
+        <Segmented
+          testID="ledger-kind"
+          value={kind}
+          onChange={(v) => patchLedger.mutate({ kind: v })}
+          options={[
+            { value: "party", label: "Party", icon: "user" },
+            { value: "cash", label: "Cash", icon: "wallet" },
+            { value: "bank", label: "Bank", icon: "landmark" },
+          ]}
+        />
       </Sheet>
 
       <Sheet visible={mode === "move"} onClose={() => setMode(null)} title="Group Select Karo" testID="move-ledger-sheet">

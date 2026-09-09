@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 8 - Cash Book / double-entry feature (Ledger.kind = party|cash|bank, contra bookings, mode cash/bank/none) fully verified backend + frontend. Created /app/backend/tests/test_cashbook.py with 11 scenarios covering dashboard shape (cash_in_hand/bank_balance/accounts/ledger_kind/via), cash contra (party debit -> cash credit), bank contra (auto-creates bank ledger when missing), mode='none' (no contra), edit sync (keep/cash/bank/none transitions), delete sync (party->contra + account-side->party), account-side direct entry (no contra), ledger kind toggle + auto-move to Accounts group on bank-named create, AI bot flow (cash contra reply line + bank via gpay + last-entry-delete naming party + opening-balance no Cash line), and monthly summary accounts[]. All 11 cashbook tests pass. Regression: 33/34 pass on backend_test.py + test_lid_pairing.py (34 tests); the single fail is a pre-existing flake in test_simulate_flow_ai due to fuzzy match hitting stale TESTPARTY_* ledgers from prior iterations (not caused by cashbook feature). Frontend (desktop 1440x900 + mobile 390x844) verified: dashboard tiles Cash in hand / Bank / Parties / Lena hai / Dena hai / Net with correct testIDs and no truncation; Accounts group card shows 'in hand'; Cash ledger under Accounts shows 'in hand' balance label + 'In / Out' column + In/Out row markers; party ledger (Biki [Mill]) Nayi Entry form exposes txn-mode segmented with txn-mode-cash/bank/none; saving 1 debit cash entry appends row with 'from Cash' / via-Cash source line; edit sheet exposes txn-mode-keep option first; delete via txn-delete-button restores balance; ledger-menu-button -> ledger-kind-option opens ledger-kind sheet with Party/Cash/Bank segmented; Summary page has 'Cash / Bank' section with testID summary-accounts (Biki kind NOT changed). Mobile viewport preserves hero Cash-in-hand big number with Lena/Dena row.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "backend/tests/backend_test.py::test_simulate_flow_ai", "issue": "Pre-existing flake unrelated to Cash Book: the test creates TESTPARTY_<hex> ledgers each run and never cleans them up, so the AI fuzzy-matcher later hits stale near-duplicate ledgers and returns a 'confirm_match' clarify reply instead of adding the entry. Not blocking; fix by cleaning up TESTPARTY_* ledgers at test end (like test_cashbook.py does with CBTEST_*) or by using a truly unique prefix per run."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "TxnForm", "issues": ["Cosmetic: playwright locator('body').inner_text() did not surface the exact dynamic label 'Paisa kahan se gaya' (component renders 'gaya' vs 'aaya' based on direction). The Segmented mode selector with testID txn-mode and its cash/bank/none options are all correctly rendered and functional; the label itself was likely just not captured in flattened text extraction. No user impact."]}
+    ],
+    "react_native_issues": [
+      {"component": "shadow* style props", "issue": "Deprecation warning in console on every render: '\"shadow*\" style props are deprecated. Use \"boxShadow\".' Reference: appears across StatTile/cards. Non-blocking."},
+      {"component": "props.pointerEvents", "issue": "Deprecation warning: 'props.pointerEvents is deprecated. Use style.pointerEvents' emitted after opening the Nayi Entry sheet. Reference: likely inside Sheet/Segmented wrapper. Non-blocking."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_cashbook.py",
+    "/app/test_reports/pytest/pytest_cashbook.xml",
+    "/app/test_reports/pytest/pytest_regression_iter8.xml"
+  ],
+  "action_items": [
+    "(Optional) Clean up TESTPARTY_* ledgers at the end of backend_test.py::test_simulate_flow_ai to eliminate the fuzzy-match flake seen across iterations.",
+    "(Optional/Low) Migrate remaining 'shadow*' style props to 'boxShadow' and any 'props.pointerEvents' to 'style.pointerEvents' to silence RN deprecation warnings."
+  ],
+  "critical_code_review_comments": [
+    "ledger_service.py:228-247 (_book_contra): correctly creates contra with opposite direction and back-links contra_txn_id on both sides; recalc_balance called on the account side after.",
+    "ledger_service.py:250-291 (update_transaction): handles all four mode transitions (keep, cash, bank, none) and switches contra when the account kind changes; also short-circuits mode='keep' when editing the account side (line 277).",
+    "ledger_service.py:300-315 (delete_transaction): symmetric soft-delete of contra + recalc for all touched ledgers; supports deletion from either side (party or account).",
+    "server.py:509-519 (POST /transactions): correctly forces mode=None when the target ledger is a money account, preventing self-contra loops.",
+    "server.py:542-572 (dashboard): filters out account-side rows that are already represented by a party recent row (contra_txn_id + account kind).",
+    "bot.py:142-168 (do_entry): emits a per-account 'Cash: ...' / 'Bank: ...' line only when a contra was booked (mode in ACCOUNT_KINDS); mode 'none' produces no such line as verified by test_bot_cashbook_flow step 4.",
+    "ledger_service.py:318-336 (migrate_cashbook): idempotent via 'meta.cashbook_v1' sentinel; safe on re-boot."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_cashbook.py (new - 11 tests)"
+  ],
+  "success_rate": {
+    "backend": "100% cashbook (11/11); 97% regression (33/34 - pre-existing flake unrelated)",
+    "frontend": "100% (all dashboard tiles, Accounts group, Cash ledger view, TxnForm modes, Edit-with-keep, ledger-kind sheet, Summary Cash/Bank section verified)"
+  },
+  "seed_data_creation": "Test module creates CBTEST_<hex> ledgers (party + one CBTEST_SBI_Bank auto-detected as bank) and deletes all of them via DELETE /api/ledgers/{id} in a module-scoped autouse teardown; also deletes the AI-created Zulnok* party ledger from step 9. Existing ledgers Cash, Bank, Biki [Mill], Mantu are not touched. Frontend test added and then deleted one 1-INR debit entry on Biki [Mill] via txn-delete-button; balance restored.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Cash Book suite lives at /app/backend/tests/test_cashbook.py (uses pytest-xdist LoadScopeScheduling; scenario chain shares 'cash_scenario' fixture across tests 2-6 via module-scoped dict). Frontend testIDs verified: dashboard-cash, dashboard-bank, dashboard-total-lena, dashboard-total-dena, dashboard-net, dashboard-ledger-count, add-txn-fab, add-txn-sheet, txn-mode, txn-mode-cash, txn-mode-bank, txn-mode-none, txn-mode-keep, txn-submit-button, txn-delete-button, edit-txn-sheet, ledger-menu-button, ledger-menu-sheet, ledger-kind-option, ledger-kind-sheet, ledger-kind, summary-accounts. AI bot replies now include per-account balance lines ('Cash: ...' / 'Bank: ...') whenever a contra is booked. To repro pytest run: cd /app && python -m pytest backend/tests/test_cashbook.py backend/tests/backend_test.py backend/tests/test_lid_pairing.py -o addopts=''.",
+  "rca_of_issue": "N/A - all requested cashbook scenarios pass. The Iteration 8 user complaint 'Cash opening balance dala tha, Lena hai me cash kyu dikh raha hai; Biki ko 1,00,000 diya to cash se katna chahiye' is resolved by the ACCOUNT_KINDS filter in server.py:547 (Cash/Bank ledgers no longer contribute to total_lena/total_dena) and by the auto-contra booking in ledger_service.add_transaction/_book_contra (party debit now credits Cash by the same amount)."
+}

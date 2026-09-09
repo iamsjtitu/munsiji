@@ -53,7 +53,13 @@ export function StatTile({
       <View style={{ flex: 1 }}>
         <Text style={styles.label}>{label}</Text>
         {value !== undefined ? (
-          <Money testID={testID} value={value} size={28} colored={false} style={{ color: tone === "neutral" ? colors.onSurface : fg }} />
+          <Money
+            testID={testID}
+            value={value}
+            size={Math.abs(value) >= 10000000 ? 22 : 26}
+            colored={false}
+            style={{ color: tone === "success" || tone === "error" ? fg : value < -0.004 ? colors.error : colors.onSurface }}
+          />
         ) : (
           <Text style={styles.count} testID={testID}>
             {count}

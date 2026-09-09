@@ -26,17 +26,22 @@ from auth import check_lockout, current_owner, hash_pin, make_token, record_fail
 from bot import day_end, day_start, get_settings, handle_message, ist_datetime_for, public_base_url, save_export  # noqa: E402
 from db import client, db  # noqa: E402
 from ledger_service import (  # noqa: E402
+    account_balances,
+    add_transaction,
     create_ledger,
+    delete_transaction,
     ensure_default_groups,
     get_ledger,
     group_totals,
     list_ledgers,
     merge_ledgers,
+    migrate_cashbook,
     normalize,
     recalc_balance,
     statement,
+    update_transaction,
 )
-from models import Group, Ledger, Settings, Transaction, WaMessage, now_utc  # noqa: E402
+from models import ACCOUNT_KINDS, Group, Ledger, Settings, Transaction, WaMessage, now_utc  # noqa: E402
 from wa_provider import ProviderNotConfigured, Wa9xProvider, digits, get_provider, is_owner, looks_like_lid, parse_incoming, same_number  # noqa: E402
 import system  # noqa: E402
 from emailer import send_alert  # noqa: E402
@@ -76,6 +81,7 @@ async def startup():
             {"$set": {"webhook_secret": secrets.token_urlsafe(24)}},
         )
     await ensure_default_groups()
+    await migrate_cashbook()
     asyncio.create_task(update_failure_watcher())
 
 
@@ -303,7 +309,7 @@ async def get_groups():
     out = []
     async for g in db.groups.find({"deleted_at": None}).sort("created_at", 1):
         grp = Group.from_mongo(g).api()
-        grp.update(totals.get(grp["id"], {"ledger_count": 0, "balance": 0.0, "lena": 0.0, "dena": 0.0}))
+        grp.update(totals.get(grp["id"], {"ledger_count": 0, "balance": 0.0, "lena": 0.0, "dena": 0.0, "account_balance": None}))
         out.append(grp)
     return out
 
@@ -341,12 +347,14 @@ class LedgerCreate(BaseModel):
     name: str
     group_id: str
     aliases: List[str] = []
+    kind: Optional[str] = None  # party | cash | bank (default: guessed from name)
 
 
 class LedgerPatch(BaseModel):
     name: Optional[str] = None
     group_id: Optional[str] = None
     aliases: Optional[List[str]] = None
+    kind: Optional[str] = None
 
 
 class MergeBody(BaseModel):
@@ -364,7 +372,9 @@ async def post_ledger(body: LedgerCreate):
         raise HTTPException(400, "Naam zaroori hai")
     if not await db.groups.find_one({"_id": oid(body.group_id), "deleted_at": None}):
         raise HTTPException(404, "Group nahi mila")
-    l = await create_ledger(body.name, body.group_id, body.aliases)
+    if body.kind not in (None, "party", "cash", "bank"):
+        raise HTTPException(400, "kind party/cash/bank")
+    l = await create_ledger(body.name, body.group_id, body.aliases, kind=body.kind)
     return l.api()
 
 
@@ -391,6 +401,10 @@ async def patch_ledger(ledger_id: str, body: LedgerPatch):
         upd["group_id"] = body.group_id
     if body.aliases is not None:
         upd["aliases"] = [a.strip() for a in body.aliases if a.strip()]
+    if body.kind is not None:
+        if body.kind not in ("party", "cash", "bank"):
+            raise HTTPException(400, "kind party/cash/bank")
+        upd["kind"] = body.kind
     if upd:
         await db.ledgers.update_one({"_id": oid(ledger_id)}, {"$set": upd})
     l = await get_ledger(ledger_id)
@@ -470,6 +484,7 @@ class TxnCreate(BaseModel):
     direction: str
     note: str = ""
     entry_date: Optional[str] = None
+    mode: Optional[str] = "cash"  # party entries: cash | bank | none (no money moved). Ignored for cash/bank ledgers.
 
 
 class TxnPatch(BaseModel):
@@ -478,6 +493,7 @@ class TxnPatch(BaseModel):
     note: Optional[str] = None
     entry_date: Optional[str] = None
     ledger_id: Optional[str] = None
+    mode: Optional[str] = "keep"  # keep | cash | bank | none
 
 
 @protected.get("/transactions")
@@ -493,49 +509,32 @@ async def get_transactions(ledger_id: Optional[str] = None, limit: int = 50):
 async def post_transaction(body: TxnCreate):
     if body.direction not in ("debit", "credit"):
         raise HTTPException(400, "direction debit/credit")
-    if not await get_ledger(body.ledger_id):
+    ledger = await get_ledger(body.ledger_id)
+    if not ledger:
         raise HTTPException(404, "Ledger nahi mila")
-    t = Transaction(ledger_id=body.ledger_id, amount=round(body.amount, 2), direction=body.direction, note=body.note.strip(),
-                    entry_date=parse_entry_date(body.entry_date), source="app")
-    res = await db.transactions.insert_one(t.to_mongo())
-    t.id = str(res.inserted_id)
-    await recalc_balance(body.ledger_id)
+    mode = None if ledger.is_account or body.mode in (None, "none") else body.mode
+    if mode not in (None, "cash", "bank"):
+        raise HTTPException(400, "mode cash/bank/none")
+    t = await add_transaction(body.ledger_id, body.amount, body.direction, body.note.strip(), parse_entry_date(body.entry_date), "app", mode=mode)
     return t.api()
 
 
 @protected.patch("/transactions/{txn_id}")
 async def patch_transaction(txn_id: str, body: TxnPatch):
-    doc = await db.transactions.find_one({"_id": oid(txn_id), "deleted_at": None})
-    if not doc:
+    if body.ledger_id and not await get_ledger(body.ledger_id):
+        raise HTTPException(404, "Ledger nahi mila")
+    mode = body.mode if body.mode in ("keep", "cash", "bank") else None
+    new = await update_transaction(txn_id, amount=body.amount, direction=body.direction, note=body.note,
+                                   entry_date=parse_entry_date(body.entry_date) if body.entry_date else None, ledger_id=body.ledger_id, mode=mode)
+    if not new:
         raise HTTPException(404, "Entry nahi mili")
-    upd: dict = {"updated_at": now_utc()}
-    if body.amount is not None:
-        upd["amount"] = round(body.amount, 2)
-    if body.direction in ("debit", "credit"):
-        upd["direction"] = body.direction
-    if body.note is not None:
-        upd["note"] = body.note.strip()
-    if body.entry_date:
-        upd["entry_date"] = parse_entry_date(body.entry_date)
-    if body.ledger_id and body.ledger_id != doc["ledger_id"]:
-        if not await get_ledger(body.ledger_id):
-            raise HTTPException(404, "Ledger nahi mila")
-        upd["ledger_id"] = body.ledger_id
-    await db.transactions.update_one({"_id": doc["_id"]}, {"$set": upd})
-    await recalc_balance(doc["ledger_id"])
-    if upd.get("ledger_id"):
-        await recalc_balance(upd["ledger_id"])
-    new = await db.transactions.find_one({"_id": doc["_id"]})
     return Transaction.from_mongo(new).api()
 
 
 @protected.delete("/transactions/{txn_id}")
-async def delete_transaction(txn_id: str):
-    doc = await db.transactions.find_one({"_id": oid(txn_id), "deleted_at": None})
-    if not doc:
+async def delete_transaction_route(txn_id: str):
+    if not await delete_transaction(txn_id):
         raise HTTPException(404, "Entry nahi mili")
-    await db.transactions.update_one({"_id": doc["_id"]}, {"$set": {"deleted_at": now_utc()}})
-    await recalc_balance(doc["ledger_id"])
     return {"ok": True}
 
 
@@ -545,20 +544,32 @@ async def dashboard():
     lena = dena = 0.0
     count = 0
     async for l in db.ledgers.find({"deleted_at": None}):
+        if l.get("kind", "party") in ACCOUNT_KINDS:
+            continue
         count += 1
         b = l.get("current_balance", 0.0)
         if b > 0:
             lena += b
         else:
             dena += abs(b)
-    recent_docs = await db.transactions.find({"deleted_at": None}).sort([("created_at", -1)]).limit(8).to_list(8)
-    names = {str(l["_id"]): l["name"] for l in await db.ledgers.find({}, {"name": 1}).to_list(5000)}
+    accounts = await account_balances()
+    recent_docs = await db.transactions.find({"deleted_at": None}).sort([("created_at", -1)]).limit(24).to_list(24)
+    meta = {str(l["_id"]): l for l in await db.ledgers.find({}, {"name": 1, "kind": 1}).to_list(5000)}
     recent = []
     for d in recent_docs:
+        lm = meta.get(d["ledger_id"], {})
+        if d.get("contra_txn_id") and lm.get("kind", "party") in ACCOUNT_KINDS:
+            continue  # auto-booked cash/bank side of a party entry — the party row already shows "via Cash"
         t = Transaction.from_mongo(d).api()
-        t["ledger_name"] = names.get(t["ledger_id"], "?")
+        t["ledger_name"] = lm.get("name", "?")
+        t["ledger_kind"] = lm.get("kind", "party")
+        if t.get("contra_ledger_id"):
+            t["via"] = meta.get(t["contra_ledger_id"], {}).get("name")
         recent.append(t)
-    return {"total_lena": round(lena, 2), "total_dena": round(dena, 2), "ledger_count": count, "recent": recent}
+        if len(recent) >= 8:
+            break
+    return {"total_lena": round(lena, 2), "total_dena": round(dena, 2), "ledger_count": count, "recent": recent,
+            "cash_in_hand": accounts["cash"], "bank_balance": accounts["bank"], "accounts": accounts["accounts"]}
 
 
 @protected.get("/summary/monthly")
@@ -578,9 +589,15 @@ async def monthly_summary(month: str):
     groups = {str(g["_id"]): g["name"] for g in await db.groups.find({}).to_list(500)}
     by_group: dict = {}
     ledger_rows = []
+    account_rows = []
     for r in rows:
         l = ledgers.get(r["_id"])
         if not l:
+            continue
+        if l.get("kind", "party") in ACCOUNT_KINDS:
+            # money accounts: debit = in, credit = out — shown separately, not mixed into party Dr/Cr totals
+            account_rows.append({"ledger_id": r["_id"], "ledger_name": l["name"], "kind": l["kind"], "in": round(r["debit"], 2), "out": round(r["credit"], 2),
+                                 "net": round(r["debit"] - r["credit"], 2), "count": r["count"], "current_balance": l.get("current_balance", 0.0)})
             continue
         gname = groups.get(l["group_id"], "General")
         g = by_group.setdefault(l["group_id"], {"group_id": l["group_id"], "group_name": gname, "debit": 0.0, "credit": 0.0, "count": 0})
@@ -594,7 +611,7 @@ async def monthly_summary(month: str):
     total_debit = round(sum(g["debit"] for g in by_group.values()), 2)
     total_credit = round(sum(g["credit"] for g in by_group.values()), 2)
     return {"month": month, "total_debit": total_debit, "total_credit": total_credit, "net": round(total_debit - total_credit, 2),
-            "groups": sorted(by_group.values(), key=lambda g: -(g["debit"] + g["credit"])), "ledgers": ledger_rows}
+            "groups": sorted(by_group.values(), key=lambda g: -(g["debit"] + g["credit"])), "ledgers": ledger_rows, "accounts": account_rows}
 
 
 # ------------------------------------------------------------------ settings

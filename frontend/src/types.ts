@@ -5,7 +5,11 @@ export type Group = {
   balance: number;
   lena: number;
   dena: number;
+  account_balance: number | null; // sum of cash/bank ledgers in this group (null = none)
 };
+
+export type LedgerKind = "party" | "cash" | "bank";
+export type TxnMode = "cash" | "bank" | "none";
 
 export type Ledger = {
   id: string;
@@ -13,6 +17,7 @@ export type Ledger = {
   group_id: string;
   group_name?: string;
   aliases: string[];
+  kind: LedgerKind;
   current_balance: number;
 };
 
@@ -22,13 +27,19 @@ export type Transaction = {
   id: string;
   ledger_id: string;
   ledger_name?: string;
+  ledger_kind?: LedgerKind;
   amount: number;
   direction: Direction;
   note: string;
   entry_date: string;
   source: string;
   running_balance?: number;
+  contra_txn_id?: string | null;
+  contra_ledger_id?: string | null;
+  via?: string | null; // name of the linked cash/bank (or party) ledger
 };
+
+export type AccountBalance = { ledger_id: string; name: string; kind: LedgerKind; balance: number };
 
 export type Statement = {
   opening_balance: number;
@@ -113,6 +124,9 @@ export type Dashboard = {
   total_dena: number;
   ledger_count: number;
   recent: Transaction[];
+  cash_in_hand: number;
+  bank_balance: number;
+  accounts: AccountBalance[];
 };
 
 export type UpdateStatus = { state: "idle" | "requested" | "updating" | "building" | "restarting" | "done" | "failed"; message?: string; commit?: string; updated_at?: string };
@@ -150,4 +164,5 @@ export type MonthlySummary = {
     count: number;
     current_balance: number;
   }[];
+  accounts: { ledger_id: string; ledger_name: string; kind: LedgerKind; in: number; out: number; net: number; count: number; current_balance: number }[];
 };

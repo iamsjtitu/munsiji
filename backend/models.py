@@ -39,14 +39,23 @@ class Group(BaseDocument):
     deleted_at: Optional[datetime] = None
 
 
+LedgerKind = Literal["party", "cash", "bank"]
+ACCOUNT_KINDS = ("cash", "bank")
+
+
 class Ledger(BaseDocument):
     name: str
     normalized: str
     group_id: PyObjectId
     aliases: List[str] = []
+    kind: LedgerKind = "party"  # cash/bank = money accounts (cash book); party = people/firms (lena/dena)
     current_balance: float = 0.0
     created_at: datetime = Field(default_factory=now_utc)
     deleted_at: Optional[datetime] = None
+
+    @property
+    def is_account(self) -> bool:
+        return self.kind in ACCOUNT_KINDS
 
 
 Direction = Literal["debit", "credit"]
@@ -61,6 +70,8 @@ class Transaction(BaseDocument):
     source: str = "app"  # whatsapp | app
     wa_message_id: Optional[str] = None
     sender: Optional[str] = None
+    contra_txn_id: Optional[str] = None  # double entry: the linked cash/bank (or party) transaction
+    contra_ledger_id: Optional[str] = None
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: Optional[datetime] = None
     deleted_at: Optional[datetime] = None

@@ -3,46 +3,54 @@ import { useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 
 import { Button, Chip, Field, Segmented } from "@/src/components/ui";
-import { todayISO } from "@/src/format";
+import { directionLabels, todayISO } from "@/src/format";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
-import type { Direction, Transaction } from "@/src/types";
+import type { Direction, LedgerKind, Transaction, TxnMode } from "@/src/types";
 
-export type TxnValues = { amount: number; direction: Direction; note: string; entry_date: string };
+export type TxnValues = { amount: number; direction: Direction; note: string; entry_date: string; mode: TxnMode | "keep" };
 
 const useStyles = makeStyles((colors) => ({
   label: { fontFamily: fonts.text, fontSize: 12, fontWeight: "600", color: colors.muted, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 },
+  hint: { fontFamily: fonts.text, fontSize: 12, color: colors.muted, marginTop: 6, marginBottom: 12, lineHeight: 16 },
   error: { fontFamily: fonts.text, fontSize: 13, color: colors.error, marginBottom: 12 },
   chips: { flexDirection: "row", gap: 8, marginBottom: 8 },
 }));
 
 export function TxnForm({
   initial,
+  kind = "party",
   onSubmit,
   onDelete,
   submitting,
 }: {
   initial?: Transaction;
+  kind?: LedgerKind;
   onSubmit: (v: TxnValues) => void;
   onDelete?: () => void;
   submitting?: boolean;
 }) {
   const styles = useStyles();
   const { colors } = useTheme();
+  const isAccount = kind === "cash" || kind === "bank";
   const [direction, setDirection] = useState<Direction>(initial?.direction ?? "debit");
   const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
   const [note, setNote] = useState(initial?.note ?? "");
   const [date, setDate] = useState(initial ? dayjs(initial.entry_date).format("YYYY-MM-DD") : todayISO());
+  // existing entries keep their linked cash/bank side unless the user changes it
+  const [mode, setMode] = useState<TxnMode | "keep">(initial ? "keep" : "cash");
   const [error, setError] = useState("");
+  const labels = directionLabels(kind);
 
   const submit = () => {
     const amt = parseFloat(amount.replace(/,/g, ""));
     if (!amt || amt <= 0) return setError("Sahi amount daalo");
     if (!dayjs(date, "YYYY-MM-DD", true).isValid() && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return setError("Date YYYY-MM-DD format mein daalo");
     setError("");
-    onSubmit({ amount: amt, direction, note: note.trim(), entry_date: date });
+    onSubmit({ amount: amt, direction, note: note.trim(), entry_date: date, mode: isAccount ? "none" : mode });
   };
 
   const yesterday = dayjs().subtract(1, "day").format("YYYY-MM-DD");
+  const moneyOut = direction === "debit";
 
   return (
     <View>
@@ -53,13 +61,36 @@ export function TxnForm({
           value={direction}
           onChange={setDirection}
           options={[
-            { value: "debit", label: "Diya (Dr)", icon: "arrow-up-right", color: colors.error },
-            { value: "credit", label: "Mila (Cr)", icon: "arrow-down-left", color: colors.success },
+            { value: "debit", label: labels.debit, icon: isAccount ? "arrow-down-left" : "arrow-up-right", color: isAccount ? colors.success : colors.error },
+            { value: "credit", label: labels.credit, icon: isAccount ? "arrow-up-right" : "arrow-down-left", color: isAccount ? colors.error : colors.success },
           ]}
         />
       </View>
       <Field testID="txn-amount-input" label="Amount (₹)" mono keyboardType="decimal-pad" value={amount} onChangeText={setAmount} placeholder="0" autoFocus />
-      <Field testID="txn-note-input" label="Note" value={note} onChangeText={setNote} placeholder="e.g. salary, advance, cash" />
+      <Field testID="txn-note-input" label="Note" value={note} onChangeText={setNote} placeholder={isAccount ? "e.g. opening balance, deposit" : "e.g. salary, advance, cash"} />
+      {!isAccount ? (
+        <View style={{ marginBottom: 4 }}>
+          <Text style={styles.label}>Paisa kahan se {moneyOut ? "gaya" : "aaya"}</Text>
+          <Segmented
+            testID="txn-mode"
+            value={mode}
+            onChange={(v) => setMode(v as TxnMode | "keep")}
+            options={[
+              ...(initial ? [{ value: "keep", label: initial.via ? `${initial.via} (same)` : "Koi nahi (same)", icon: "lock" as const }] : []),
+              { value: "cash", label: "Cash", icon: "wallet" },
+              { value: "bank", label: "Bank", icon: "landmark" },
+              { value: "none", label: "Koi nahi", icon: "minus" },
+            ]}
+          />
+          <Text style={styles.hint}>
+            {mode === "none"
+              ? "Sirf party ka hisab badlega — Cash/Bank pe asar nahi (opening balance, udhaar maal, salary due)."
+              : mode === "keep"
+                ? "Pehle jaisa hi linked rahega; amount/date badle to wahan bhi update hoga."
+                : `Auto: ${mode === "cash" ? "Cash" : "Bank"} account ${moneyOut ? "se kat jaayega" : "mein jud jaayega"} (double entry).`}
+          </Text>
+        </View>
+      ) : null}
       <Text style={styles.label}>Date</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
         <Chip testID="txn-date-today" label="Aaj" selected={date === todayISO()} onPress={() => setDate(todayISO())} />

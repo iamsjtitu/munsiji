@@ -10,6 +10,7 @@ import { Icon } from "@/src/components/Icon";
 import { Money } from "@/src/components/Money";
 import { Sheet } from "@/src/components/Sheet";
 import { Button, EmptyState, Field } from "@/src/components/ui";
+import { balanceLabel } from "@/src/format";
 import { DESKTOP_PAD, useIsDesktop } from "@/src/hooks/useLayout";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
@@ -200,9 +201,9 @@ export default function GroupScreen() {
                 </Text>
               ) : null}
             </View>
-            <View>
-              <Money value={item.current_balance} size={16} />
-              <Text style={styles.label}>{item.current_balance > 0 ? "lena hai" : item.current_balance < 0 ? "dena hai" : "settled"}</Text>
+            <View style={{ alignItems: "flex-end" }}>
+              <Money value={item.current_balance} size={16} kind={item.kind} />
+              <Text style={styles.label}>{balanceLabel(item.current_balance, item.kind)}</Text>
             </View>
           </Pressable>
         )}

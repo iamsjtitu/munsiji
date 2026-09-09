@@ -32,7 +32,9 @@ You convert WhatsApp messages into structured JSON for a personal ledger (Tally-
 Conventions:
 - "debit" = owner GAVE money / paid / lent / advance / expense paid (default when unclear). Increases "lena hai".
 - "credit" = owner RECEIVED money back (received/recved/recv/mila/wapas/aaya/return/jama) OR owner OWES the party (e.g. staff salary due: "Mantu salary 8000" => credit 8000 to Mantu's ledger, because owner owes salary). "advance kaata" means the earlier advance (already a debit) is adjusted; do not create an extra entry for it, just mention in note.
-- party_name: the person/firm the ledger is for. Clean it: remove amounts, keep brackets content e.g. "Biki [Mill]". Never include words like "account", "ledger", "ka", "ko", "se".
+- party_name: the person/firm the ledger is for. Clean it: remove amounts, keep brackets content e.g. "Biki [Mill]". Never include words like "account", "ledger", "ka", "ko", "se". Money accounts are also ledgers: "cash" / "Cash in hand" / "bank" / "SBI bank" — use party_name "Cash" or the bank name when the user is talking about the cash box / bank itself (e.g. "cash opening balance 500000", "bank me 20000 jama").
+- mode: how the money physically moved for a PARTY entry — "cash" (default: paid/received in cash or unspecified), "bank" (UPI, GPay, PhonePe, Paytm, NEFT, IMPS, cheque, online, bank transfer, "account se"), or "none" when NO money moved now: opening balance / purana baki, goods or maal given on credit, bill/invoice raised, salary DUE (not paid), interest added. The system auto-books the counter entry in the Cash/Bank account, so be careful: "Mantu salary 8000" (owner owes) => mode "none"; "Mantu ko salary 8000 diya" (paid) => mode "cash".
+- For entries directly on a Cash/Bank ledger: direction "debit" = money came INTO the account (deposit / opening balance / received), "credit" = money went OUT (withdrawal / expense). mode "none".
 - group_name: only if the user explicitly names a group/account category (e.g. "Investment account", "Staff", "Expenses", "Personal"). Else null.
 - matched_ledger_id: choose from EXISTING LEDGERS if the party clearly refers to one of them (ignore typos, case, brackets, spacing, e.g. "biki mill" == "Biki [Mill]"). Otherwise null. match_confidence: "high" if clearly same, "medium" if plausible but unsure, "none" if it is a new party.
 - entry_date: resolve relative dates ("kal"=yesterday, "aaj"=today, "parso"=day before yesterday, "2 din pehle", "5 tarikh", "7 jan") using TODAY. Format YYYY-MM-DD. null if not mentioned.
@@ -48,7 +50,7 @@ Conventions:
 - If the message is genuinely ambiguous about WHICH party (e.g. only an amount, no name, and no pending context), use intent "unknown" with a clarification. Never guess a party.
 
 Return ONLY a JSON object with keys:
-intent, party_name, group_name, matched_ledger_id, match_confidence, entries, entry_date, new_amount, from_date, to_date, format, choice, clarification.
+intent, party_name, group_name, matched_ledger_id, match_confidence, entries, entry_date, mode, new_amount, from_date, to_date, format, choice, clarification.
 No markdown, no explanation."""
 
 
@@ -83,8 +85,8 @@ class Parsed(dict):
 
 def _ledger_context(ledgers: List[Ledger], groups: List[Group]) -> str:
     gmap = {g.id: g.name for g in groups}
-    lines = [f"- id={l.id} | name=\"{l.name}\" | group={gmap.get(l.group_id, '?')} | aliases={l.aliases}" for l in ledgers]
-    return "EXISTING LEDGERS:\n" + ("\n".join(lines) if lines else "(none yet)") + "\n\nGROUPS: " + ", ".join(g.name for g in groups)
+    lines = [f"- id={l.id} | name=\"{l.name}\" | group={gmap.get(l.group_id, '?')} | kind={l.kind} | aliases={l.aliases}" for l in ledgers]
+    return "EXISTING LEDGERS (kind=cash/bank are money accounts, party = people/firms):\n" + ("\n".join(lines) if lines else "(none yet)") + "\n\nGROUPS: " + ", ".join(g.name for g in groups)
 
 
 async def ai_parse(text: str, ledgers: List[Ledger], groups: List[Group], pending_hint: Optional[str] = None, api_key: Optional[str] = None) -> Parsed:

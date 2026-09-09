@@ -10,7 +10,7 @@ import { Icon } from "@/src/components/Icon";
 import { Money } from "@/src/components/Money";
 import { StatTile } from "@/src/components/StatTile";
 import { Card, Chip, EmptyState } from "@/src/components/ui";
-import { monthOptions } from "@/src/format";
+import { formatINR, monthOptions } from "@/src/format";
 import { DESKTOP_PAD, useIsDesktop } from "@/src/hooks/useLayout";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 import type { MonthlySummary } from "@/src/types";
@@ -91,6 +91,29 @@ export default function SummaryScreen() {
     </Card>
   ) : null;
 
+  const accountsCard = d && d.accounts.length > 0 ? (
+    <Card style={isDesktop ? undefined : { marginHorizontal: 16 }} testID="summary-accounts">
+      {d.accounts.map((a, i) => (
+        <View key={a.ledger_id}>
+          {i > 0 && <View style={styles.divider} />}
+          <Pressable style={styles.row} testID={`summary-account-${a.ledger_id}`} onPress={() => router.push({ pathname: "/ledger/[id]", params: { id: a.ledger_id } })}>
+            <Icon name={a.kind === "cash" ? "wallet" : "landmark"} size={18} color={colors.muted} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.name}>{a.ledger_name}</Text>
+              <Text style={styles.meta}>
+                {a.count} entries · abhi {formatINR(a.current_balance)}
+              </Text>
+            </View>
+            <View style={{ alignItems: "flex-end" }}>
+              <Text style={[styles.small, { color: colors.success }]}>In {a.in.toLocaleString("en-IN")}</Text>
+              <Text style={[styles.small, { color: colors.error }]}>Out {a.out.toLocaleString("en-IN")}</Text>
+            </View>
+          </Pressable>
+        </View>
+      ))}
+    </Card>
+  ) : null;
+
   const states = (
     <>
       {q.isError ? (
@@ -98,7 +121,7 @@ export default function SummaryScreen() {
           <EmptyState icon="wifi-off" title="Load nahi hua" text="Tap karke retry karo" />
         </Pressable>
       ) : null}
-      {d && d.ledgers.length === 0 ? <EmptyState icon="calendar" title="Is mahine koi entry nahi" testID="summary-empty" /> : null}
+      {d && d.ledgers.length === 0 && d.accounts.length === 0 ? <EmptyState icon="calendar" title="Is mahine koi entry nahi" testID="summary-empty" /> : null}
     </>
   );
 
@@ -124,11 +147,22 @@ export default function SummaryScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={[styles.section, styles.sectionDesk]}>By group</Text>
                 {groupsCard}
+                {accountsCard ? (
+                  <>
+                    <Text style={[styles.section, styles.sectionDesk, { marginTop: 24 }]}>Cash / Bank</Text>
+                    {accountsCard}
+                  </>
+                ) : null}
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.section, styles.sectionDesk]}>By ledger</Text>
                 {ledgersCard}
               </View>
+            </View>
+          ) : accountsCard ? (
+            <View>
+              <Text style={[styles.section, styles.sectionDesk]}>Cash / Bank</Text>
+              {accountsCard}
             </View>
           ) : null}
         </ScrollView>
@@ -155,6 +189,12 @@ export default function SummaryScreen() {
               {groupsCard}
               <Text style={[styles.section, { marginTop: 24 }]}>By ledger</Text>
               {ledgersCard}
+            </>
+          ) : null}
+          {accountsCard ? (
+            <>
+              <Text style={[styles.section, { marginTop: 24 }]}>Cash / Bank</Text>
+              {accountsCard}
             </>
           ) : null}
         </ScrollView>

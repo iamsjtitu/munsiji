@@ -15,6 +15,8 @@ from ledger_service import (
     add_transaction,
     balance_text,
     create_ledger,
+    delete_transaction,
+    detect_mode,
     fmt_inr,
     fuzzy_match,
     get_ledger,
@@ -22,6 +24,7 @@ from ledger_service import (
     list_ledgers,
     recalc_balance,
     statement,
+    update_transaction,
 )
 from models import ExportFile, Group, Ledger, Pending, Settings, WaMessage, now_utc
 from wa_provider import digits, same_number
@@ -30,6 +33,15 @@ logger = logging.getLogger(__name__)
 
 MATCH_HIGH = 88
 MATCH_LOW = 60
+
+
+def resolve_mode(ai_mode: Optional[str], text: str, note: str) -> Optional[str]:
+    """Payment mode for a party entry: AI's 'mode' (cash|bank|none) wins, else keyword detection (default cash)."""
+    if ai_mode in ("cash", "bank"):
+        return ai_mode
+    if ai_mode == "none":
+        return None
+    return detect_mode(text, note)
 
 
 async def get_settings() -> Settings:
@@ -127,20 +139,33 @@ class Bot:
         return "new", None, None
 
     # ------------------------------------------------------------ actions
-    async def do_entry(self, ledger: Ledger, parsed: dict, is_new: bool, group_name: str = "") -> str:
+    async def do_entry(self, ledger: Ledger, parsed: dict, is_new: bool, group_name: str = "", text: str = "") -> str:
         d = parsed_date_or_none(parsed.get("entry_date"))
         entry_dt = ist_datetime_for(d)
         lines = []
+        touched_accounts: dict = {}
         for e in parsed.get("entries") or []:
-            await add_transaction(
+            mode = None if ledger.is_account else resolve_mode(parsed.get("mode"), text, e.get("note") or "")
+            txn = await add_transaction(
                 ledger.id, e["amount"], e["direction"], e.get("note") or "", entry_dt, "whatsapp" if self.source == "whatsapp" else "app",
-                wa_message_id=self.wa_message_id, sender=self.sender,
+                wa_message_id=self.wa_message_id, sender=self.sender, mode=mode,
             )
-            lines.append(f"{fmt_inr(e['amount'])} {'diya' if e['direction'] == 'debit' else 'mila'}" + (f" ({e['note']})" if e.get("note") else ""))
+            if txn.contra_ledger_id:
+                touched_accounts[txn.contra_ledger_id] = mode
+            if ledger.is_account:
+                verb = "jama (in)" if e["direction"] == "debit" else "nikla (out)"
+            else:
+                verb = "diya" if e["direction"] == "debit" else "mila"
+            lines.append(f"{fmt_inr(e['amount'])} {verb}" + (f" ({e['note']})" if e.get("note") else ""))
         bal = await recalc_balance(ledger.id)
         head = f"Naya ledger bana: {ledger.name} ({group_name}). " if is_new else f"{ledger.name}: "
         when = f" [{nice_date(d)}]" if d and d != today_ist() else ""
-        return f"{head}{', '.join(lines)}{when}. Balance: {balance_text(bal)}"
+        reply = f"{head}{', '.join(lines)}{when}. Balance: {balance_text(bal, ledger.kind)}"
+        for acct_id, mode in touched_accounts.items():
+            acct = await get_ledger(acct_id)
+            if acct:
+                reply += f"\n{acct.name}: {balance_text(acct.current_balance, acct.kind)}"
+        return reply
 
     async def do_statement(self, ledger: Ledger, fmt: Optional[str], d_from: Optional[date], d_to: Optional[date]) -> str:
         period = ""
@@ -159,20 +184,27 @@ class Bot:
     async def do_balance(self, ledger: Ledger) -> str:
         bal = await recalc_balance(ledger.id)
         last = await db.transactions.find({"ledger_id": ledger.id, "deleted_at": None}).sort([("entry_date", -1), ("created_at", -1)]).limit(3).to_list(3)
-        lines = [f"{ledger.name}: {balance_text(bal)}"]
+        lines = [f"{ledger.name}: {balance_text(bal, ledger.kind)}"]
         for t in last:
             d = t["entry_date"].astimezone(IST).strftime("%d %b") if t["entry_date"].tzinfo else t["entry_date"].strftime("%d %b")
-            lines.append(f"• {d}: {fmt_inr(t['amount'])} {'diya' if t['direction'] == 'debit' else 'mila'}" + (f" ({t['note']})" if t.get("note") else ""))
+            verb = ("in" if t["direction"] == "debit" else "out") if ledger.is_account else ("diya" if t["direction"] == "debit" else "mila")
+            lines.append(f"• {d}: {fmt_inr(t['amount'])} {verb}" + (f" ({t['note']})" if t.get("note") else ""))
         return "\n".join(lines)
 
     async def do_delete_last(self) -> str:
         t = await db.transactions.find_one({"deleted_at": None, "source": {"$in": ["whatsapp", "app"]}}, sort=[("created_at", -1)])
         if not t:
             return "Koi entry nahi mili delete karne ke liye."
-        await db.transactions.update_one({"_id": t["_id"]}, {"$set": {"deleted_at": now_utc()}})
-        bal = await recalc_balance(t["ledger_id"])
         ledger = await get_ledger(t["ledger_id"])
-        return f"Last entry delete ho gayi: {fmt_inr(t['amount'])} {'diya' if t['direction'] == 'debit' else 'mila'} ({ledger.name if ledger else '?'}). Balance: {balance_text(bal)}"
+        if t.get("contra_txn_id") and ledger and ledger.is_account:
+            # the pair's account side was booked last — name the party side in the reply
+            other = await db.transactions.find_one({"_id": ObjectId(t["contra_txn_id"]), "deleted_at": None})
+            if other:
+                t, ledger = other, await get_ledger(other["ledger_id"])
+        await delete_transaction(str(t["_id"]))
+        ledger = await get_ledger(t["ledger_id"])
+        bal = ledger.current_balance if ledger else 0.0
+        return f"Last entry delete ho gayi: {fmt_inr(t['amount'])} {'diya' if t['direction'] == 'debit' else 'mila'} ({ledger.name if ledger else '?'}). Balance: {balance_text(bal, ledger.kind if ledger else 'party')}"
 
     async def do_correct_last(self, new_amount: Optional[float]) -> str:
         if not new_amount or new_amount <= 0:
@@ -180,10 +212,15 @@ class Bot:
         t = await db.transactions.find_one({"deleted_at": None}, sort=[("created_at", -1)])
         if not t:
             return "Koi entry nahi mili correct karne ke liye."
-        await db.transactions.update_one({"_id": t["_id"]}, {"$set": {"amount": round(float(new_amount), 2), "updated_at": now_utc()}})
-        bal = await recalc_balance(t["ledger_id"])
         ledger = await get_ledger(t["ledger_id"])
-        return f"Theek kiya: {fmt_inr(t['amount'])} → {fmt_inr(new_amount)} ({ledger.name if ledger else '?'}). Balance: {balance_text(bal)}"
+        if t.get("contra_txn_id") and ledger and ledger.is_account:
+            other = await db.transactions.find_one({"_id": ObjectId(t["contra_txn_id"]), "deleted_at": None})
+            if other:
+                t = other
+        await update_transaction(str(t["_id"]), amount=float(new_amount))
+        ledger = await get_ledger(t["ledger_id"])
+        bal = ledger.current_balance if ledger else 0.0
+        return f"Theek kiya: {fmt_inr(t['amount'])} → {fmt_inr(new_amount)} ({ledger.name if ledger else '?'}). Balance: {balance_text(bal, ledger.kind if ledger else 'party')}"
 
     # ------------------------------------------------------------ pending resolution
     async def resolve_pending(self, pending: dict, parsed: dict, text: str) -> Optional[str]:
@@ -220,7 +257,7 @@ class Bot:
                 if payload.get("query_name"):
                     await add_alias(ledger, payload["query_name"])
                 if action == "entry":
-                    return await self.do_entry(ledger, payload["parsed"], False)
+                    return await self.do_entry(ledger, payload["parsed"], False, text=payload["parsed"].get("text", ""))
                 if action == "statement":
                     return await self.do_statement(ledger, payload.get("format"), parsed_date_or_none(payload.get("from")), parsed_date_or_none(payload.get("to")))
                 return await self.do_balance(ledger)
@@ -229,7 +266,7 @@ class Bot:
                 if action == "entry":
                     group = await get_or_create_group(payload.get("group_name"))
                     new_ledger = await create_ledger(payload["query_name"], group.id)
-                    return await self.do_entry(new_ledger, payload["parsed"], True, group.name)
+                    return await self.do_entry(new_ledger, payload["parsed"], True, group.name, text=payload["parsed"].get("text", ""))
                 return "Theek hai. Sahi ledger ka naam likh ke dobara bhejo."
             await self.clear_pending()
             return None
@@ -250,7 +287,7 @@ class Bot:
                 ledger = await get_ledger(picked)
                 action = payload.get("action")
                 if action == "entry":
-                    return await self.do_entry(ledger, payload["parsed"], False)
+                    return await self.do_entry(ledger, payload["parsed"], False, text=payload["parsed"].get("text", ""))
                 if action == "statement":
                     return await self.do_statement(ledger, payload.get("format"), parsed_date_or_none(payload.get("from")), parsed_date_or_none(payload.get("to")))
                 return await self.do_balance(ledger)
@@ -278,7 +315,8 @@ class Bot:
             d_from = parsed_date_or_none(parsed.get("from_date"))
             d_to = parsed_date_or_none(parsed.get("to_date"))
             fmt = (parsed.get("format") or None)
-            base_payload = {"query_name": party, "group_name": parsed.get("group_name"), "parsed": {"entries": parsed.get("entries") or [], "entry_date": parsed.get("entry_date")},
+            base_payload = {"query_name": party, "group_name": parsed.get("group_name"),
+                            "parsed": {"entries": parsed.get("entries") or [], "entry_date": parsed.get("entry_date"), "mode": parsed.get("mode"), "text": text},
                             "action": intent, "format": fmt, "from": d_from.isoformat() if d_from else None, "to": d_to.isoformat() if d_to else None}
 
             if kind == "none":
@@ -300,12 +338,12 @@ class Bot:
                     return f"'{party}' naam ka koi ledger nahi mila. Sahi naam likho."
                 group = await get_or_create_group(parsed.get("group_name"))
                 new_ledger = await create_ledger(party, group.id)
-                return await self.do_entry(new_ledger, parsed, True, group.name)
+                return await self.do_entry(new_ledger, parsed, True, group.name, text=text)
             # match
             if party and ledger:
                 await add_alias(ledger, party)
             if intent == "entry":
-                return await self.do_entry(ledger, parsed, False)
+                return await self.do_entry(ledger, parsed, False, text=text)
             if intent == "statement":
                 return await self.do_statement(ledger, fmt, d_from, d_to)
             return await self.do_balance(ledger)

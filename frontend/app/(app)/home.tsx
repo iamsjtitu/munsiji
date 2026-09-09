@@ -14,7 +14,7 @@ import { InstallBanner } from "@/src/components/InstallBanner";
 import { StatTile } from "@/src/components/StatTile";
 import { UpdateBanner } from "@/src/components/UpdateBanner";
 import { Button, Card, EmptyState, Field } from "@/src/components/ui";
-import { formatDate, balanceLabel } from "@/src/format";
+import { formatDate, formatINR, balanceLabel } from "@/src/format";
 import { DESKTOP_PAD, useIsDesktop } from "@/src/hooks/useLayout";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
@@ -69,6 +69,7 @@ const GROUP_ICONS: Record<string, React.ComponentProps<typeof Icon>["name"]> = {
   expenses: "receipt",
   personal: "user",
   general: "folder",
+  accounts: "wallet",
 };
 
 function GroupCard({ item, desktop }: { item: Group; desktop: boolean }) {
@@ -94,11 +95,11 @@ function GroupCard({ item, desktop }: { item: Group; desktop: boolean }) {
           </View>
           {desktop ? (
             <View style={{ alignItems: "flex-end" }}>
-              <Money value={item.balance} size={16} />
-              <Text style={styles.groupMeta}>{balanceLabel(item.balance)}</Text>
+              <Money value={item.account_balance ?? item.balance} size={16} kind={item.account_balance != null ? "cash" : "party"} />
+              <Text style={styles.groupMeta}>{item.account_balance != null ? "in hand" : balanceLabel(item.balance)}</Text>
             </View>
           ) : (
-            <Money value={item.balance} size={16} showLabel />
+            <Money value={item.account_balance ?? item.balance} size={16} showLabel kind={item.account_balance != null ? "cash" : "party"} />
           )}
           <Icon name="chevron-right" size={18} color={colors.muted} />
         </Card>
@@ -114,27 +115,33 @@ function RecentList({ recent }: { recent: Transaction[] }) {
   if (recent.length === 0) return <EmptyState icon="notebook" title="Abhi koi entry nahi" text="WhatsApp pe hisab bhejo ya ledger mein manual entry karo" />;
   return (
     <>
-      {recent.map((t, i) => (
-        <View key={t.id}>
-          {i > 0 && <View style={styles.divider} />}
-          <Pressable
-            style={({ pressed }) => [styles.recentRow, pressed && { backgroundColor: colors.surfaceTertiary }]}
-            testID={`recent-txn-${t.id}`}
-            onPress={() => router.push({ pathname: "/ledger/[id]", params: { id: t.ledger_id } })}
-          >
-            <Icon name={t.direction === "debit" ? "arrow-up-right" : "arrow-down-left"} size={18} color={t.direction === "debit" ? colors.error : colors.success} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.recentName} numberOfLines={1}>
-                {t.ledger_name}
-              </Text>
-              <Text style={styles.recentMeta} numberOfLines={1}>
-                {formatDate(t.entry_date)} · {t.note || (t.direction === "debit" ? "Diya" : "Mila")} · {t.source}
-              </Text>
-            </View>
-            <Money value={t.amount} tone={t.direction} size={15} />
-          </Pressable>
-        </View>
-      ))}
+      {recent.map((t, i) => {
+        const acct = t.ledger_kind === "cash" || t.ledger_kind === "bank";
+        const moneyIn = acct ? t.direction === "debit" : t.direction === "credit";
+        const verb = acct ? (t.direction === "debit" ? "Jama" : "Nikla") : t.direction === "debit" ? "Diya" : "Mila";
+        return (
+          <View key={t.id}>
+            {i > 0 && <View style={styles.divider} />}
+            <Pressable
+              style={({ pressed }) => [styles.recentRow, pressed && { backgroundColor: colors.surfaceTertiary }]}
+              testID={`recent-txn-${t.id}`}
+              onPress={() => router.push({ pathname: "/ledger/[id]", params: { id: t.ledger_id } })}
+            >
+              <Icon name={moneyIn ? "arrow-down-left" : "arrow-up-right"} size={18} color={moneyIn ? colors.success : colors.error} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.recentName} numberOfLines={1}>
+                  {t.ledger_name}
+                </Text>
+                <Text style={styles.recentMeta} numberOfLines={1}>
+                  {formatDate(t.entry_date)} · {t.note || verb} · {t.source}
+                  {t.via ? ` · via ${t.via}` : ""}
+                </Text>
+              </View>
+              <Money value={t.amount} tone={moneyIn ? "credit" : "debit"} size={15} />
+            </Pressable>
+          </View>
+        );
+      })}
     </>
   );
 }
@@ -198,10 +205,19 @@ export default function HomeScreen() {
         <ScrollView contentContainerStyle={{ paddingBottom: 40 }} refreshControl={<RefreshControl refreshing={refreshing && !groups.isLoading} onRefresh={refresh} tintColor={colors.brandPrimary} />}>
           <UpdateBanner />
           <View style={styles.deskBody}>
-            <Animated.View entering={FadeInDown.duration(300)} style={styles.statsRow} testID="dashboard-card">
-              <StatTile label="Lena hai" value={dash.data?.total_lena ?? 0} tone="success" icon="arrow-down-left" testID="dashboard-total-lena" />
-              <StatTile label="Dena hai" value={dash.data?.total_dena ?? 0} tone="error" icon="arrow-up-right" testID="dashboard-total-dena" />
-              <StatTile label="Ledgers" count={dash.data?.ledger_count ?? 0} sub={`${groups.data?.length ?? 0} groups`} tone="brand" icon="notebook" testID="dashboard-ledger-count" />
+            <Animated.View entering={FadeInDown.duration(300)} style={{ gap: 16 }} testID="dashboard-card">
+              <View style={styles.statsRow}>
+                <StatTile label="Cash in hand" value={dash.data?.cash_in_hand ?? 0} tone="brand" icon="wallet" testID="dashboard-cash" />
+                {(dash.data?.bank_balance ?? 0) !== 0 || (dash.data?.accounts ?? []).some((a) => a.kind === "bank") ? (
+                  <StatTile label="Bank" value={dash.data?.bank_balance ?? 0} tone="brand" icon="landmark" testID="dashboard-bank" />
+                ) : null}
+                <StatTile label="Parties" count={dash.data?.ledger_count ?? 0} sub={`${groups.data?.length ?? 0} groups`} tone="neutral" icon="notebook" testID="dashboard-ledger-count" />
+              </View>
+              <View style={styles.statsRow}>
+                <StatTile label="Lena hai" value={dash.data?.total_lena ?? 0} tone="success" icon="arrow-down-left" testID="dashboard-total-lena" />
+                <StatTile label="Dena hai" value={dash.data?.total_dena ?? 0} tone="error" icon="arrow-up-right" testID="dashboard-total-dena" />
+                <StatTile label="Net (lena − dena)" value={(dash.data?.total_lena ?? 0) - (dash.data?.total_dena ?? 0)} tone="neutral" icon="scale" testID="dashboard-net" />
+              </View>
             </Animated.View>
             <View style={styles.deskColumns}>
               <View style={{ flex: 3 }}>
@@ -251,18 +267,24 @@ export default function HomeScreen() {
             <UpdateBanner />
             <InstallBanner />
             <Animated.View entering={FadeInDown.duration(300)} style={styles.hero} testID="dashboard-card">
-              <Text style={styles.heroLabel}>Overall</Text>
+              <Text style={styles.heroLabel}>Cash in hand</Text>
+              <Money testID="dashboard-cash" value={dash.data?.cash_in_hand ?? 0} size={30} colored={false} style={{ color: (dash.data?.cash_in_hand ?? 0) < 0 ? colors.error : colors.onSurfaceInverse, marginTop: 4 }} />
+              {(dash.data?.accounts ?? []).some((a) => a.kind === "bank") ? (
+                <Text style={[styles.heroSmall, { marginTop: 4 }]}>
+                  Bank: <Text style={{ color: colors.onSurfaceInverse, fontFamily: fonts.mono }}>{formatINR(dash.data?.bank_balance ?? 0)}</Text>
+                </Text>
+              ) : null}
               <View style={styles.heroRow}>
                 <View style={styles.heroCol}>
                   <Text style={styles.heroSmall}>Lena hai</Text>
-                  <Money testID="dashboard-total-lena" value={dash.data?.total_lena ?? 0} size={24} colored={false} style={{ color: colors.success }} />
+                  <Money testID="dashboard-total-lena" value={dash.data?.total_lena ?? 0} size={22} colored={false} style={{ color: colors.success }} />
                 </View>
                 <View style={styles.heroCol}>
                   <Text style={styles.heroSmall}>Dena hai</Text>
-                  <Money testID="dashboard-total-dena" value={dash.data?.total_dena ?? 0} size={24} colored={false} style={{ color: colors.error }} />
+                  <Money testID="dashboard-total-dena" value={dash.data?.total_dena ?? 0} size={22} colored={false} style={{ color: colors.error }} />
                 </View>
               </View>
-              <Text style={[styles.heroSmall, { marginTop: 12 }]}>{dash.data?.ledger_count ?? 0} ledgers</Text>
+              <Text style={[styles.heroSmall, { marginTop: 12 }]}>{dash.data?.ledger_count ?? 0} parties</Text>
             </Animated.View>
             <Text style={styles.section}>Groups</Text>
             {groups.isError ? groupsEmpty : null}
