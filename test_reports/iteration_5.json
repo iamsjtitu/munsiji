@@ -1,0 +1,39 @@
+{
+  "summary": "Cloudflare/Caddy fix verified. Created 2 pytest files (12 tests) — all passing. gen-caddyfile.sh produces valid Caddy v2.10 configs for all 4 TLS scenarios (plain HTTP :80, auto Let's Encrypt with email block+HSTS, internal self-signed for CF Full, and origin cert auto-detected when data/certs/origin.pem+key exist). Each generated file was validated with /tmp/caddy validate (origin variant validated after sed-rewriting /certs paths to local host paths). All files contain expected security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, -Server), and correct routing (handle /api/* -> backend:8001, default handle -> web:80). install.sh syntax passes bash -n and calls deploy/gen-caddyfile.sh; docker-compose.yml mounts ../data/certs:/certs:ro on the caddy service. README section 5 documents all three Cloudflare options (A DNS-only, B TLS_MODE=internal, C origin cert with Full strict). Backend regression: GET /api/health returns 200 {ok:true}; POST /api/auth/login with PIN 3366 returns 200 with JWT access_token both with and without CF-Connecting-IP header (verified via internal loopback because Cloudflare edge blocks client-supplied CF-Connecting-IP on the public preview URL with 403 — expected CF WAF behavior, not a backend issue). No wrong-PIN attempts were made (lockout avoided).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login", "issue": "Response key is 'access_token' (with 'token_type: bearer'), not 'token'. Original problem statement mentioned '200 with token' — behavior is correct/standard OAuth2 shape but worth confirming frontend consumes 'access_token'."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_caddyfile_generator.py",
+    "/app/backend/tests/test_cloudflare_login_regression.py",
+    "/app/test_reports/pytest/pytest_cloudflare.xml"
+  ],
+  "action_items": [
+    "None required for this iteration — Cloudflare/Caddy fix is working correctly across all 3 modes. Frontend should already be using access_token from /api/auth/login (was not in scope for this iteration).",
+    "When testing this fix on an actual VPS behind Cloudflare, verify: (a) TLS_MODE=internal with CF SSL 'Full' clears Error 525; (b) after dropping origin.pem+key, TLS_MODE auto-flips to origin without editing .env; (c) Caddy container can read /certs (ro mount)."
+  ],
+  "critical_code_review_comments": [
+    "gen-caddyfile.sh envval() uses `grep | head -1 | cut` which correctly handles quoted values via `tr -d '\"'` but will not strip inline shell escapes. Fine for values written by install.sh.",
+    "gen-caddyfile.sh only emits the global `{ email ... }` block when TLS_MODE=auto — correct, because Caddy would still try ACME under `tls internal`/origin otherwise and reject the email directive without ACME. Verified with caddy validate.",
+    "Origin-cert auto-detection precedes the TLS_MODE default assignment, so an explicit `TLS_MODE=auto` in .env would still be overridden when origin.pem/key exist. This appears intentional (documented as 'origin cert files are used automatically') but worth noting in README as behavioral hint."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_caddyfile_generator.py (new)",
+    "/app/backend/tests/test_cloudflare_login_regression.py (new)"
+  ],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None. Tests generate ephemeral self-signed cert via openssl inside a tmp dir for the origin-mode case; cleaned up implicitly via tempfile.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "gen-caddyfile.sh + backend CF header fix are verified. /tmp/caddy v2.10 binary is available for future Caddyfile validation. Backend login response key is 'access_token' not 'token'. Cloudflare edge strips/rejects client-supplied CF-Connecting-IP header on the public preview URL (returns 403), so any test that spoofs this header must hit http://localhost:8001 directly.",
+  "rca_of_issue": "N/A — this iteration was verification of a fix, not a bug hunt. The reported Cloudflare Error 525 root cause (Caddy trying Let's Encrypt behind Cloudflare's orange-cloud proxy where LE HTTP-01 challenge cannot reach the origin) is correctly addressed by the new TLS_MODE=internal / origin modes and auto-detection of data/certs/origin.pem+key."
+}

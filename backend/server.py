@@ -112,6 +112,10 @@ class LoginBody(BaseModel):
 
 
 def client_ip(request: Request) -> str:
+    # Cloudflare (if proxied) -> X-Forwarded-For (Caddy) -> socket
+    cf = request.headers.get("cf-connecting-ip", "").strip()
+    if cf:
+        return cf[:64]
     fwd = request.headers.get("x-forwarded-for", "")
     return (fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "unknown"))[:64]
 

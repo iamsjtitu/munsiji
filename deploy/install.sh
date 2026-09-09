@@ -127,37 +127,8 @@ DOMAIN="$(grep -E '^DOMAIN=' .env | cut -d= -f2-)"
 EMAIL="$(grep -E '^ACME_EMAIL=' .env | cut -d= -f2-)"
 PUBLIC_URL="$(grep -E '^PUBLIC_BASE_URL=' .env | cut -d= -f2-)"
 
-# Caddy reverse proxy (auto HTTPS when a domain is given)
-if [[ -n "$DOMAIN" ]]; then
-  {
-    [[ -n "$EMAIL" ]] && printf '{\n  email %s\n}\n' "$EMAIL"
-    printf '%s {\n' "$DOMAIN"
-  } > data/Caddyfile
-else
-  printf ':80 {\n' > data/Caddyfile
-fi
-cat >> data/Caddyfile <<'EOF'
-  encode gzip
-  header {
-    X-Content-Type-Options nosniff
-    X-Frame-Options DENY
-    Referrer-Policy strict-origin-when-cross-origin
-    Permissions-Policy "camera=(), microphone=(), geolocation=()"
-    -Server
-  }
-EOF
-if [[ -n "$DOMAIN" ]]; then
-  printf '  header Strict-Transport-Security "max-age=31536000; includeSubDomains"\n' >> data/Caddyfile
-fi
-cat >> data/Caddyfile <<'EOF'
-  handle /api/* {
-    reverse_proxy backend:8001
-  }
-  handle {
-    reverse_proxy web:80
-  }
-}
-EOF
+# Caddy reverse proxy (auto HTTPS when a domain is given; see deploy/gen-caddyfile.sh for Cloudflare modes)
+bash deploy/gen-caddyfile.sh
 
 if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
   ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null

@@ -5,7 +5,7 @@ Repo: `https://github.com/iamsjtitu/munsiji` · Domain: `munsiji.app` · Alerts:
 Poora stack ek command se: **MongoDB + FastAPI backend + Web app + HTTPS (Caddy)**, GitHub se **one-tap update** (app Settings / home update bar), optional **auto-update**, aur owner ko **email alerts**.
 
 ## 1. Pehle ye 3 kaam
-1. **DNS**: `munsiji.app` ka **A record → aapke VPS ka IP** (abhi 91.195.240.94 parking pe hai — badalna hai). `www` chahiye to CNAME → munsiji.app.
+1. **DNS**: `munsiji.app` ka **A record → aapke VPS ka IP**. **Cloudflare use karte ho to neeche "Cloudflare" section dekho** (orange cloud + default settings pe Error 525 aata hai).
 2. **Email inbox**: `admin@munsiji.com` pe mail tabhi aayegi jab domain pe **MX records** honge (abhi nahi hain). Options: Cloudflare Email Routing (free, Gmail pe forward), Zoho Mail (free), Google Workspace. Tab tak Settings mein apna Gmail daal sakte ho.
 3. **GitHub**: Emergent mein **Save to GitHub** (repo `iamsjtitu/munsiji`). Repo private hai to niche wala private flow use karo.
 
@@ -52,7 +52,18 @@ Script: Docker install → swap → clone `/opt/munsiji` → `.env` (random JWT 
 
 Security defaults: PIN 4–8 digit (install pe prompt, common PINs reject), bar-bar galat PIN pe backoff lock + email alert, PIN badalne pe purane logins invalid, statement download links random token + 24h expiry (`EXPORT_LINK_TTL_HOURS`), backend container non-root, security headers (Caddy + nginx CSP).
 
-## 5. Update flow (Emergent → GitHub → VPS)
+## 5. Cloudflare ke saath HTTPS (Error 525 / 526 fix)
+Caddy default mein Let's Encrypt se certificate leta hai — ye tabhi chalta hai jab domain **seedha VPS pe** point kare. Cloudflare ka proxy (orange cloud) beech mein ho to LE fail hota hai → Cloudflare **Error 525 (SSL handshake failed)**. Teen options:
+
+| Option | Kab | Kaise |
+|---|---|---|
+| **A. DNS only** (sabse simple) | Cloudflare proxy nahi chahiye | Cloudflare DNS → `munsiji.app` A record ke **orange cloud ko grey (DNS only)** karo → 1–2 min mein Caddy khud LE cert le lega |
+| **B. Full** | Cloudflare proxy rakhna hai, 1 min fix | Cloudflare → SSL/TLS → Overview → **Full** (strict nahi). VPS pe: `cd /opt/munsiji && echo "TLS_MODE=internal" >> .env && bash deploy/gen-caddyfile.sh && docker compose -f deploy/docker-compose.yml restart caddy` |
+| **C. Full (strict)** (best) | Cloudflare proxy + proper cert | Cloudflare → SSL/TLS → **Origin Server → Create Certificate** (hostnames `munsiji.app`, `*.munsiji.app`, 15 yrs). "Origin Certificate" ko `/opt/munsiji/data/certs/origin.pem`, "Private Key" ko `/opt/munsiji/data/certs/origin.key` mein save karo. Phir `bash deploy/gen-caddyfile.sh && docker compose -f deploy/docker-compose.yml restart caddy`, aur Cloudflare SSL mode **Full (strict)** |
+
+Cloudflare pe "Always Use HTTPS" on rakho. Check: `docker compose -f deploy/docker-compose.yml logs caddy | tail -20` (cert errors yahin dikhte hain).
+
+## 6. Update flow (Emergent → GitHub → VPS)
 1. Emergent mein changes → **Save to GitHub**.
 2. App home pe **"Naya update available" bar** → **Update karo**, ya Settings → Server & Updates → **Update now**. Progress dikhta hai; web app khud reload.
 3. **Auto-update** switch on → har 15 min GitHub check, naya commit khud install.
@@ -62,7 +73,7 @@ Andar se: app `UPDATE_REQUESTED` flag likhta hai → systemd `munsiji-updater.pa
 
 > Phone ka native APK update se nahi badalta (uske liye Emergent Publish build). Backend + web app update hote hain.
 
-## 6. Useful commands (VPS)
+## 7. Useful commands (VPS)
 ```bash
 cd /opt/munsiji
 docker compose -f deploy/docker-compose.yml ps                 # status
@@ -73,14 +84,15 @@ systemctl status munsiji-updater.path munsiji-autoupdate.timer
 nano .env                                                      # PIN/owner/keys/PUBLIC_BASE_URL (first-install defaults)
 ```
 
-## 7. Backup
+## 8. Backup
 ```bash
 docker exec munsiji-mongo-1 mongodump --archive --db munsiji > munsiji-$(date +%F).archive
 docker exec -i munsiji-mongo-1 mongorestore --archive --drop < munsiji-YYYY-MM-DD.archive   # restore
 ```
 
-## 8. Files
+## 9. Files
 - `deploy/install.sh` — one-command installer (re-run safe)
+- `deploy/gen-caddyfile.sh` — Caddy config generator (TLS_MODE auto/internal/origin)
 - `deploy/update.sh` — updater (systemd se chalta hai)
 - `deploy/docker-compose.yml`, `Dockerfile.backend`, `Dockerfile.web`, `nginx.conf`, `requirements.txt`
 - `deploy/systemd/*` — updater path/service + auto-update timer
