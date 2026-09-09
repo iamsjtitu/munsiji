@@ -39,11 +39,14 @@ def check_lockout():
         raise HTTPException(status_code=429, detail=f"Bahut galat attempts. {wait}s baad try karo.")
 
 
-def record_fail():
+def record_fail() -> bool:
+    """Returns True when this failure triggered a lockout."""
     _fails["count"] += 1
     if _fails["count"] >= 5:
         _fails["count"] = 0
         _fails["locked_until"] = time.time() + 60
+        return True
+    return False
 
 
 def record_success():

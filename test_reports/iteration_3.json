@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 3 covered the new Settings feature: Emergent Keys card (write-only masked hints) + Email Alerts card + backend alert emails via Emergent-managed Resend. Backend: 11/11 pytest passed on /app/backend/tests/test_settings_alerts.py — (1) 5 wrong PINs → 401×5 then 6th → 429; alerts collection recorded 'pin_lockout' kind. (2) GET /api/settings masks secrets: only has_/hint/ai_configured/email_configured returned; raw emergent_llm_key, emergent_email_key, pin_hash absent. (3) PUT semantics correct: setting emergent_llm_key='sk-emergent-a8720A6Fc985b3986A' → has=true & hint='••••986A'; PUT with '' preserves it (has still true); PUT emergent_email_key='-' clears it (has=false). (4) Owner-email validation: 'not-an-email' → 400; 'delivered@resend.dev' → 200; POST /api/settings/test-email returned {ok:true, email_id:...} and /api/alerts included kind 'test'; setting back to admin@munsiji.com and re-calling test-email returned 502 (Cloudflare rewrites the body but the origin JSON detail is 'Email nahi gaya: 422: Undeliverable recipient…' — verified via /api/alerts record which had ok=false and error containing '422' + 'undeliverable'). (5) AI regression: POST /api/whatsapp/simulate 'Test Alert Party X - 1500' returned a Hinglish reply proving the LLM key from settings is used. Frontend (390×844 web preview): 7/7 checkpoints passed — login 3366 via digit pad, navigate to /settings, keys-card visible with settings-llm-key label showing 'SAVED ••••986A' and settings-email-key showing 'SERVER .ENV SE'; email-card shows settings-owner-email=admin@munsiji.com, settings-alerts-switch, settings-test-email-button; tapping test-email → 'Request failed (502)' toast (undeliverable — expected); changing owner email to delivered@resend.dev + Save → 'Settings save ho gayi' toast; test-email again → 'Test email bhej di: delivered@resend.dev' success toast; restored to admin@munsiji.com and saved. Final backend state verified: owner_email=admin@munsiji.com, alerts_enabled=true, has_emergent_llm_key=true (••••986A). Console still shows the pre-existing shadow*/pointerEvents RN-Web deprecation warnings from iterations 1-2 — non-blocking.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/settings/test-email (5xx)", "issue": "When origin returns HTTPException(502) for undeliverable recipient, the Cloudflare edge in the preview cluster intercepts all 5xx and replaces the origin JSON body with a CF-branded HTML page. Not a bug in Munsiji, but external clients only see status=502 without the 'Email nahi gaya: 422: Undeliverable recipient' detail — the frontend toast falls back to a generic 'Request failed (502)' string. Consider returning 200 with {ok:false, error:...} for provider-side rejects, so the toast can show the real reason."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "react-native-web shadow* props", "issue": "'shadow*' style props are deprecated. Use 'boxShadow' (RN-Web warning). Same as iterations 1-2 — non-blocking."},
+      {"component": "pointerEvents prop", "issue": "props.pointerEvents is deprecated. Use style.pointerEvents (RN-Web warning). Same as iterations 1-2."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_settings_alerts.py",
+    "/app/test_reports/pytest/pytest_settings_alerts.xml"
+  ],
+  "action_items": [
+    "(Optional UX) Toast on test-email failure currently shows 'Request failed (502)' because Cloudflare hides the JSON detail on 5xx. Either return 200 with ok=false + error from POST /api/settings/test-email, OR use 400/422 with detail so CF passes body through. Then the toast will show 'Undeliverable recipient' directly.",
+    "(Carry-over) Migrate remaining shadow* → boxShadow and pointerEvents prop → style.pointerEvents to silence RN-Web deprecation warnings."
+  ],
+  "critical_code_review_comments": [
+    "server.py settings_api() correctly strips pin_hash + raw secret keys and adds has_*/hint fields; ai_configured and email_configured derived from settings OR env fallback — verified via GET.",
+    "server.py put_settings() correctly implements write-only key semantics: '' popped from update (unchanged), '-' becomes '' (clear). Owner email validation is a light '@' check — acceptable; could use pydantic EmailStr later.",
+    "emailer.send_alert() throttles by kind (30 min) unless force=True, records every attempt (ok True/False + error) in the alerts collection, and never raises — good defensive design. G2/G3 email guardrails (no forms, no shorteners, https-only anchors) enforced before send.",
+    "auth.py _fails is in-memory per process; behind multiple workers the lockout may under-count. Acceptable for a single-owner app but worth noting.",
+    "settings.tsx save mutation destructures all read-only server-derived fields before PUT; llmKey/emailKey are always sent trimmed — matches backend '' = unchanged / '-' = clear contract."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_settings_alerts.py (created)",
+    "/app/test_reports/pytest/pytest_settings_alerts.xml (generated)",
+    "/app/test_reports/iteration_3.json (created)"
+  ],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "100% (7/7 checkpoints)"},
+  "seed_data_creation": "Two /api/whatsapp/simulate calls created a couple of TEST_ ledgers via the AI parser (regression check). Alerts collection has new records for 'pin_lockout' + multiple 'test' kinds. Final settings state preserved as requested: owner_email=admin@munsiji.com, alerts_enabled=true, emergent_llm_key=sk-emergent-a8720A6Fc985b3986A (hint ••••986A). emergent_email_key was intentionally cleared during test_e and left empty (server falls back to env EMERGENT_EMAIL_KEY, ai_configured=true email_configured=true remain).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "New pytest file: /app/backend/tests/test_settings_alerts.py — takes ~75s (has a 62s sleep to clear PIN lockout). If chained with backend_test.py, run this LAST or after a wait. PIN 3366. Cloudflare rewrites any origin 5xx into its own HTML — always assert app 5xx behaviour via /api/alerts records, not response body. Settings screen is at /settings (Expo Router root) — not /home/settings. On the PIN screen use the digit buttons ('1'..'0'), no single 'pin-input' text field.",
+  "rca_of_issue": "N/A — feature works as specified. One minor UX note: toast text falls back to 'Request failed (502)' because CF hides origin JSON body for 5xx responses; frontend cannot show the 'Undeliverable recipient' reason unless the backend returns non-5xx or CF is bypassed."
+}

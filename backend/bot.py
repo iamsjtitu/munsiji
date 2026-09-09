@@ -325,7 +325,7 @@ async def handle_message(sender: str, text: str, wa_message_id: Optional[str] = 
     pending = await db.pending.find_one({"sender": sender_d})
     reply: Optional[str] = None
     try:
-        parsed = await ai_parse(text, ledgers, groups, pending_hint=pending["question"] if pending else None)
+        parsed = await ai_parse(text, ledgers, groups, pending_hint=pending["question"] if pending else None, api_key=settings.emergent_llm_key or None)
         if pending:
             reply = await bot.resolve_pending(pending, parsed, text)
         if reply is None:

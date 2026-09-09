@@ -2,31 +2,35 @@
 # ------------------------------------------------------------------------------------------
 # Munsiji.app — one-command VPS installer (Ubuntu 22.04 / 24.04, Debian 12)
 #
-#   curl -fsSL https://raw.githubusercontent.com/<USER>/<REPO>/main/deploy/install.sh | sudo bash -s -- \
-#       --repo https://github.com/<USER>/<REPO>.git \
-#       --domain munsiji.example.com --email you@example.com \
-#       --owner 917205930002 --pin 3366 --llm-key sk-emergent-xxxx
+#   curl -fsSL https://raw.githubusercontent.com/iamsjtitu/munsiji/main/deploy/install.sh | sudo bash -s -- \
+#       --repo https://github.com/iamsjtitu/munsiji.git \
+#       --domain munsiji.app --email admin@munsiji.com \
+#       --owner 917205930002 --pin 3366 --llm-key sk-emergent-xxxx --email-key ek_xxxx
 #
-# Flags: --repo (required) --branch main --domain (optional, HTTPS auto) --email (for HTTPS)
-#        --owner <whatsapp number> --pin <4-6 digit> --llm-key <Emergent LLM key> --dir /opt/munsiji
+# Flags: --repo (required) --branch main --domain (optional, HTTPS auto) --email (Let's Encrypt + default owner email)
+#        --owner-email <alerts inbox> --owner <whatsapp number> --pin <4-6 digit>
+#        --llm-key <Emergent LLM key> --email-key <Emergent email key> --dir /opt/munsiji
 # Re-running is safe: it updates code, keeps .env and data.
 # ------------------------------------------------------------------------------------------
 set -euo pipefail
 
-REPO_URL="" BRANCH="main" DOMAIN="" EMAIL="" PIN="3366" OWNER="" LLM_KEY="" APP_DIR="/opt/munsiji"
+REPO_URL="" BRANCH="main" DOMAIN="" EMAIL="" PIN="3366" OWNER="" LLM_KEY="" EMAIL_KEY="" OWNER_EMAIL="" APP_DIR="/opt/munsiji"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) REPO_URL="$2"; shift 2 ;;
     --branch) BRANCH="$2"; shift 2 ;;
     --domain) DOMAIN="$2"; shift 2 ;;
     --email) EMAIL="$2"; shift 2 ;;
+    --owner-email) OWNER_EMAIL="$2"; shift 2 ;;
     --pin) PIN="$2"; shift 2 ;;
     --owner) OWNER="$2"; shift 2 ;;
     --llm-key) LLM_KEY="$2"; shift 2 ;;
+    --email-key) EMAIL_KEY="$2"; shift 2 ;;
     --dir) APP_DIR="$2"; shift 2 ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
   esac
 done
+OWNER_EMAIL="${OWNER_EMAIL:-$EMAIL}"
 
 log() { echo -e "\n\033[1;32m[munsiji]\033[0m $*"; }
 die() { echo -e "\033[1;31m[munsiji] $*\033[0m"; exit 1; }
@@ -92,6 +96,9 @@ JWT_EXPIRE_HOURS=72
 OWNER_PIN=$PIN
 OWNER_WHATSAPP=$OWNER
 EMERGENT_LLM_KEY=$LLM_KEY
+EMERGENT_EMAIL_KEY=$EMAIL_KEY
+EMAIL_FROM_NAME=Munsiji
+OWNER_EMAIL=$OWNER_EMAIL
 PUBLIC_BASE_URL=$PUBLIC_URL
 DOMAIN=$DOMAIN
 ACME_EMAIL=$EMAIL
@@ -101,6 +108,9 @@ EOF
   echo ".env ban gaya"
 else
   echo ".env already hai — same rakha (edit: $APP_DIR/.env)"
+  grep -q '^EMAIL_FROM_NAME=' .env || echo "EMAIL_FROM_NAME=Munsiji" >> .env
+  grep -q '^EMERGENT_EMAIL_KEY=' .env || echo "EMERGENT_EMAIL_KEY=$EMAIL_KEY" >> .env
+  grep -q '^OWNER_EMAIL=' .env || echo "OWNER_EMAIL=$OWNER_EMAIL" >> .env
   # allow changing domain / branch on re-run
   [[ -n "$DOMAIN" ]] && sed -i "s#^DOMAIN=.*#DOMAIN=$DOMAIN#; s#^PUBLIC_BASE_URL=.*#PUBLIC_BASE_URL=$PUBLIC_URL#" .env
   [[ -n "$EMAIL" ]] && sed -i "s#^ACME_EMAIL=.*#ACME_EMAIL=$EMAIL#" .env

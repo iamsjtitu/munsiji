@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
+from emailer import send_alert
 from models import Group, Ledger
 
 logger = logging.getLogger(__name__)
@@ -86,9 +87,10 @@ def _ledger_context(ledgers: List[Ledger], groups: List[Group]) -> str:
     return "EXISTING LEDGERS:\n" + ("\n".join(lines) if lines else "(none yet)") + "\n\nGROUPS: " + ", ".join(g.name for g in groups)
 
 
-async def ai_parse(text: str, ledgers: List[Ledger], groups: List[Group], pending_hint: Optional[str] = None) -> Parsed:
-    api_key = os.environ.get("EMERGENT_LLM_KEY")
+async def ai_parse(text: str, ledgers: List[Ledger], groups: List[Group], pending_hint: Optional[str] = None, api_key: Optional[str] = None) -> Parsed:
+    api_key = api_key or os.environ.get("EMERGENT_LLM_KEY")
     if not api_key:
+        await send_alert("ai_failed", "AI parsing band hai — Emergent LLM key missing", ["Settings mein Emergent LLM key daalo.", f"Message: {text[:120]}", "Abhi simple regex parser use hua."])
         return fallback_parse(text, ledgers)
     today = today_ist()
     prompt = (
@@ -114,6 +116,7 @@ async def ai_parse(text: str, ledgers: List[Ledger], groups: List[Group], pendin
         return parsed
     except Exception as e:  # noqa: BLE001
         logger.warning("AI parse failed, using fallback: %s", e)
+        await send_alert("ai_failed", "AI parsing fail ho raha hai", [f"Error: {type(e).__name__}: {str(e)[:160]}", f"Message: {text[:120]}", "Emergent LLM key / balance check karo. Abhi simple regex parser use hua."])
         return fallback_parse(text, ledgers)
 
 

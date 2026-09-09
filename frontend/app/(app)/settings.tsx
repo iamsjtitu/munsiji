@@ -140,6 +140,7 @@ function ServerCard() {
 
 export default function SettingsScreen() {
   const styles = useStyles();
+  const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const toast = useToast();
@@ -149,6 +150,8 @@ export default function SettingsScreen() {
   const [form, setForm] = useState<Partial<Settings>>({});
   const [oldPin, setOldPin] = useState("");
   const [newPin, setNewPin] = useState("");
+  const [llmKey, setLlmKey] = useState("");
+  const [emailKey, setEmailKey] = useState("");
 
   useEffect(() => {
     if (settings.data) setForm(settings.data);
@@ -158,14 +161,22 @@ export default function SettingsScreen() {
 
   const save = useMutation({
     mutationFn: () => {
-      const { webhook_url: _w, configured: _c, ...body } = form as Settings;
-      return api.put<Settings>("/settings", body);
+      const { webhook_url: _w, configured: _c, has_emergent_llm_key: _a, emergent_llm_key_hint: _b, has_emergent_email_key: _d, emergent_email_key_hint: _e, ai_configured: _f, email_configured: _g, ...body } = form as Settings;
+      return api.put<Settings>("/settings", { ...body, emergent_llm_key: llmKey.trim(), emergent_email_key: emailKey.trim() });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["wa-status"] });
+      setLlmKey("");
+      setEmailKey("");
       toast.show("Settings save ho gayi", "success");
     },
+    onError: (e: Error) => toast.show(e.message, "error"),
+  });
+
+  const testEmail = useMutation({
+    mutationFn: () => api.post("/settings/test-email"),
+    onSuccess: () => toast.show(`Test email bhej di: ${form.owner_email}`, "success"),
     onError: (e: Error) => toast.show(e.message, "error"),
   });
 
@@ -207,6 +218,42 @@ export default function SettingsScreen() {
             {settings.data?.webhook_url ?? "..."}
           </Text>
           <Field testID="settings-public-url" label="Public base URL (files ke liye)" value={form.public_base_url ?? ""} onChangeText={set("public_base_url")} placeholder="https://your-app.emergent.host" autoCapitalize="none" keyboardType="url" />
+        </Card>
+
+        <Text style={styles.section}>Emergent Keys (AI & Email)</Text>
+        <Card style={styles.card} testID="keys-card">
+          <Text style={styles.hint}>
+            Emergent Universal Key — WhatsApp messages ki AI parsing (Gemini) ke liye. Emergent Profile → Universal Key se copy karo. Email key alerts bhejne ke liye. Khaali chhodne pe purani value rehti hai; hatane ke liye sirf &quot;-&quot; likho.
+          </Text>
+          <Field
+            testID="settings-llm-key"
+            label={`Emergent LLM key ${form.has_emergent_llm_key ? `· saved ${form.emergent_llm_key_hint}` : form.ai_configured ? "· server .env se" : "· NOT SET"}`}
+            value={llmKey}
+            onChangeText={setLlmKey}
+            placeholder={form.has_emergent_llm_key ? "Nayi key daalne ke liye type karo" : "sk-emergent-..."}
+            autoCapitalize="none"
+            secureTextEntry
+          />
+          <Field
+            testID="settings-email-key"
+            label={`Emergent Email key ${form.has_emergent_email_key ? `· saved ${form.emergent_email_key_hint}` : "· server .env se"}`}
+            value={emailKey}
+            onChangeText={setEmailKey}
+            placeholder={form.has_emergent_email_key ? "Nayi key daalne ke liye type karo" : "ek_..."}
+            autoCapitalize="none"
+            secureTextEntry
+          />
+        </Card>
+
+        <Text style={styles.section}>Email Alerts</Text>
+        <Card style={styles.card} testID="email-card">
+          <Text style={styles.hint}>Alerts is email pe jaate hain: galat PIN (5 baar → lock), wa.9x reply fail, AI parsing fail, server update fail. Har alert type max 1 baar / 30 min.</Text>
+          <Field testID="settings-owner-email" label="Owner email" value={form.owner_email ?? ""} onChangeText={set("owner_email")} placeholder="admin@munsiji.com" autoCapitalize="none" keyboardType="email-address" />
+          <View style={styles.switchRow}>
+            <Text style={styles.switchText}>Email alerts on</Text>
+            <Switch testID="settings-alerts-switch" value={form.alerts_enabled ?? true} onValueChange={(v) => setForm((f) => ({ ...f, alerts_enabled: v }))} trackColor={{ true: colors.brandPrimary, false: colors.border }} />
+          </View>
+          <Button testID="settings-test-email-button" title="Test email bhejo" variant="secondary" icon="send" onPress={() => testEmail.mutate()} loading={testEmail.isPending} disabled={!form.owner_email} />
         </Card>
 
         <Text style={styles.section}>Whitelist</Text>

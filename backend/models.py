@@ -81,6 +81,10 @@ class Settings(BaseDocument):
     key: str = "main"
     owner_number: str
     pin_hash: str
+    owner_email: str = ""
+    alerts_enabled: bool = True
+    emergent_llm_key: str = ""
+    emergent_email_key: str = ""
     provider: str = "mock"  # mock | wa9x
     wa9x_base_url: str = ""
     wa9x_api_key: str = ""

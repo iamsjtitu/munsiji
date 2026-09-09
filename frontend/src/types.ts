@@ -52,6 +52,14 @@ export type WaMessage = {
 
 export type Settings = {
   owner_number: string;
+  owner_email: string;
+  alerts_enabled: boolean;
+  has_emergent_llm_key: boolean;
+  emergent_llm_key_hint: string;
+  has_emergent_email_key: boolean;
+  emergent_email_key_hint: string;
+  ai_configured: boolean;
+  email_configured: boolean;
   provider: "mock" | "wa9x";
   wa9x_base_url: string;
   wa9x_api_key: string;

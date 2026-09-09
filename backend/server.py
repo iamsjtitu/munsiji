@@ -33,6 +33,8 @@ from ledger_service import (  # noqa: E402
 from models import Group, Ledger, Settings, Transaction, WaMessage, now_utc  # noqa: E402
 from wa_provider import ProviderNotConfigured, get_provider, parse_incoming  # noqa: E402
 import system  # noqa: E402
+from emailer import send_alert  # noqa: E402
+import asyncio  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -49,9 +51,28 @@ async def startup():
     await db.wa_messages.create_index("wa_message_id")
     await db.ledgers.create_index("group_id")
     if not await db.settings.find_one({"key": "main"}):
-        s = Settings(owner_number=os.environ["OWNER_WHATSAPP"], pin_hash=hash_pin(os.environ["OWNER_PIN"]))
+        s = Settings(owner_number=os.environ["OWNER_WHATSAPP"], pin_hash=hash_pin(os.environ["OWNER_PIN"]), owner_email=os.environ.get("OWNER_EMAIL", ""))
         await db.settings.insert_one(s.to_mongo())
+    else:
+        await db.settings.update_one(
+            {"key": "main", "$or": [{"owner_email": {"$exists": False}}, {"owner_email": ""}]},
+            {"$set": {"owner_email": os.environ.get("OWNER_EMAIL", "")}},
+        )
     await ensure_default_groups()
+    asyncio.create_task(update_failure_watcher())
+
+
+async def update_failure_watcher():
+    """Self-host only: email the owner once when a GitHub update fails."""
+    while True:
+        try:
+            if system.supported():
+                st = system.read_status()
+                if st.get("state") == "failed" and st.get("updated_at"):
+                    await send_alert("update_failed", "Server update fail hua", [st.get("message", ""), f"Time: {st['updated_at']}", "Settings > Server & Updates > Update log dekho, phir Retry karo."], force=True, ref=st["updated_at"])
+        except Exception as e:  # noqa: BLE001
+            logger.warning("update watcher: %s", e)
+        await asyncio.sleep(60)
 
 
 @app.on_event("shutdown")
@@ -90,7 +111,8 @@ async def login(body: LoginBody):
     check_lockout()
     s = await get_settings()
     if not verify_pin(body.pin, s.pin_hash):
-        record_fail()
+        if record_fail():
+            await send_alert("pin_lockout", "Galat PIN — 5 baar try hua, 60s lock", ["Kisi ne 5 baar galat PIN daala; login 60 second ke liye lock hai.", "Agar ye aap nahi the to Settings se PIN badal lo."])
         raise HTTPException(status_code=401, detail="Galat PIN")
     record_success()
     return {"access_token": make_token(), "token_type": "bearer"}
@@ -128,6 +150,7 @@ async def whatsapp_webhook(request: Request):
             await db.wa_messages.update_many({"wa_message_id": msg.message_id} if msg.message_id else {"sender": msg.sender, "text": msg.text},
                                              {"$set": {"status": "send_failed", "send_error": str(e)[:300]}})
             result["status"] = "send_failed"
+            await send_alert("wa_send_failed", "WhatsApp reply nahi gaya (wa.9x)", [f"Error: {str(e)[:160]}", f"Message: {msg.text[:120]}", "Entry save ho gayi hai; sirf reply nahi gaya. Settings mein wa.9x config check karo ya app se kaam karo."])
     return {"status": result["status"]}
 
 
@@ -452,6 +475,10 @@ async def monthly_summary(month: str):
 # ------------------------------------------------------------------ settings
 class SettingsPatch(BaseModel):
     owner_number: Optional[str] = None
+    owner_email: Optional[str] = None
+    alerts_enabled: Optional[bool] = None
+    emergent_llm_key: Optional[str] = None
+    emergent_email_key: Optional[str] = None
     provider: Optional[str] = None
     wa9x_base_url: Optional[str] = None
     wa9x_api_key: Optional[str] = None
@@ -466,9 +493,18 @@ class PinChange(BaseModel):
     new_pin: str = Field(pattern=r"^\d{4,6}$")
 
 
+SECRET_FIELDS = ("emergent_llm_key", "emergent_email_key")
+
+
 def settings_api(s: Settings) -> dict:
     d = s.api()
     d.pop("pin_hash", None)
+    for f in SECRET_FIELDS:
+        val = d.pop(f, "") or ""
+        d[f"has_{f}"] = bool(val)
+        d[f"{f}_hint"] = f"••••{val[-4:]}" if val else ""
+    d["ai_configured"] = bool(s.emergent_llm_key or os.environ.get("EMERGENT_LLM_KEY"))
+    d["email_configured"] = bool((s.emergent_email_key or os.environ.get("EMERGENT_EMAIL_KEY")) and s.owner_email)
     d["webhook_url"] = f"{public_base_url(s)}/api/whatsapp/webhook"
     d["configured"] = bool(s.wa9x_base_url and s.wa9x_api_key)
     return d
@@ -484,9 +520,37 @@ async def put_settings(body: SettingsPatch):
     upd = {k: v.strip() if isinstance(v, str) else v for k, v in body.model_dump(exclude_none=True).items()}
     if "provider" in upd and upd["provider"] not in ("mock", "wa9x"):
         raise HTTPException(400, "provider mock/wa9x")
+    if "owner_email" in upd and upd["owner_email"] and "@" not in upd["owner_email"]:
+        raise HTTPException(400, "Sahi email daalo")
+    for f in SECRET_FIELDS:  # empty = unchanged, "-" = clear
+        if f in upd:
+            if upd[f] == "":
+                upd.pop(f)
+            elif upd[f] == "-":
+                upd[f] = ""
     upd["updated_at"] = now_utc()
     await db.settings.update_one({"key": "main"}, {"$set": upd})
     return settings_api(await get_settings())
+
+
+@protected.post("/settings/test-email")
+async def test_email():
+    s = await get_settings()
+    if not s.owner_email:
+        raise HTTPException(400, "Owner email set karo")
+    r = await send_alert("test", "Test alert — email chal rahi hai", ["Ye test email hai. Alerts is address pe aayenge:", s.owner_email], force=True)
+    if not r.get("ok"):
+        # 400 (not 5xx) so the real provider reason reaches the app through CDN edges
+        raise HTTPException(400, f"Email nahi gaya: {r.get('error') or r.get('skipped')}")
+    return r
+
+
+@protected.get("/alerts")
+async def list_alerts(limit: int = 20):
+    docs = await db.alerts.find({}, {"_id": 0}).sort("sent_at", -1).limit(limit).to_list(limit)
+    for d in docs:
+        d["sent_at"] = d["sent_at"].isoformat() if hasattr(d["sent_at"], "isoformat") else d["sent_at"]
+    return docs
 
 
 @protected.put("/settings/pin")
