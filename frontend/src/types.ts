@@ -60,9 +60,10 @@ export type Settings = {
   emergent_email_key_hint: string;
   ai_configured: boolean;
   email_configured: boolean;
+  has_wa9x_api_key: boolean;
+  wa9x_api_key_hint: string;
   provider: "mock" | "wa9x";
   wa9x_base_url: string;
-  wa9x_api_key: string;
   wa9x_instance_id: string;
   wa9x_send_path: string;
   wa9x_send_doc_path: string;

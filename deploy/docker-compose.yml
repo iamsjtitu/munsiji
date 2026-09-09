@@ -20,10 +20,8 @@ services:
     env_file: ../.env
     environment:
       MONGO_URL: mongodb://mongo:27017
-      REPO_DIR: /repo
       UPDATER_DIR: /updater
     volumes:
-      - ..:/repo
       - ../data/updater:/updater
     depends_on:
       mongo:

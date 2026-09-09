@@ -121,16 +121,19 @@ export default function PinScreen() {
         <Icon name="server" size={20} color={colors.muted} />
       </Pressable>
       <Sheet visible={serverOpen} onClose={() => setServerOpen(false)} title="Server" testID="server-sheet">
-        <Text style={styles.serverHint}>Apne VPS ka URL daalo (e.g. https://munsiji.example.com). Khaali chhodo to default server use hoga{defaultServerUrl ? ` (${defaultServerUrl})` : ""}.</Text>
+        <Text style={styles.serverHint}>Apne VPS ka URL daalo (e.g. https://munsiji.app). Khaali chhodo to default server use hoga{defaultServerUrl ? ` (${defaultServerUrl})` : ""}.</Text>
+        <Text style={[styles.serverHint, { color: colors.error }]}>⚠ Sirf apna hi server URL daalo — galat/anjaan server pe aapka PIN aur data chala jaayega. Sirf https:// URL.</Text>
         <Field testID="pin-server-url-input" label="Server URL" value={serverInput} onChangeText={setServerInput} placeholder={defaultServerUrl || "https://your-vps.com"} autoCapitalize="none" keyboardType="url" autoFocus />
         <Button
           testID="pin-server-url-save"
           title="Save"
           onPress={() =>
-            void setServerUrl(serverInput).then(() => {
-              setServerOpen(false);
-              setError("");
-            })
+            void setServerUrl(serverInput)
+              .then(() => {
+                setServerOpen(false);
+                setError("");
+              })
+              .catch((e: Error) => setError(e.message))
           }
         />
       </Sheet>

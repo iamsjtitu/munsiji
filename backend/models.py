@@ -81,6 +81,8 @@ class Settings(BaseDocument):
     key: str = "main"
     owner_number: str
     pin_hash: str
+    pin_changed_at: Optional[datetime] = None
+    webhook_secret: str = ""
     owner_email: str = ""
     alerts_enabled: bool = True
     emergent_llm_key: str = ""
@@ -104,7 +106,9 @@ class Pending(BaseDocument):
 
 
 class ExportFile(BaseDocument):
+    token: str
     filename: str
     content_type: str
     data: bytes
     created_at: datetime = Field(default_factory=now_utc)
+    expires_at: datetime

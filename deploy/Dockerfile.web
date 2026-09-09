@@ -15,5 +15,6 @@ RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.
 
 FROM nginx:1.27-alpine
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY deploy/nginx-headers.conf /etc/nginx/security-headers.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80

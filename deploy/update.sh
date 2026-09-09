@@ -6,6 +6,7 @@ set -uo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$APP_DIR"
+umask 000  # files must stay writable by the (non-root) backend container user
 UPD="$APP_DIR/data/updater"
 mkdir -p "$UPD"
 STATUS="$UPD/status.json"
@@ -53,3 +54,4 @@ $COMPOSE up -d --remove-orphans >> "$LOG" 2>&1
 docker image prune -f >> "$LOG" 2>&1 || true
 
 status done "Update ho gaya — naya version live hai"
+/bin/bash "$APP_DIR/deploy/check-update.sh" || true

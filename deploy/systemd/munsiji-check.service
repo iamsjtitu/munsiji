@@ -1,0 +1,8 @@
+[Unit]
+Description=Munsiji: refresh installed vs latest version info
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/munsiji
+ExecStart=/bin/bash /opt/munsiji/deploy/check-update.sh
+TimeoutStartSec=120

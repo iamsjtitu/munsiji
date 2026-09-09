@@ -132,7 +132,7 @@ function ServerCard() {
       <Field testID="server-url-input" label="Server URL" value={url} onChangeText={setUrl} placeholder={defaultServerUrl || "https://your-vps.com"} autoCapitalize="none" keyboardType="url" />
       <View style={styles.btnRow}>
         <Button testID="server-url-reset" title="Default" variant="secondary" onPress={() => void setServerUrl("").then(() => toast.show("Default server set", "success"))} style={{ flex: 1 }} />
-        <Button testID="server-url-save" title="Save & re-login" onPress={() => void setServerUrl(url).then(() => toast.show("Server URL save ho gaya", "success"))} disabled={url.trim() === serverUrl} style={{ flex: 1 }} />
+        <Button testID="server-url-save" title="Save & re-login" onPress={() => void setServerUrl(url).then(() => toast.show("Server URL save ho gaya", "success")).catch((e: Error) => toast.show(e.message, "error"))} disabled={url.trim() === serverUrl} style={{ flex: 1 }} />
       </View>
     </Card>
   );
@@ -152,6 +152,7 @@ export default function SettingsScreen() {
   const [newPin, setNewPin] = useState("");
   const [llmKey, setLlmKey] = useState("");
   const [emailKey, setEmailKey] = useState("");
+  const [waKey, setWaKey] = useState("");
 
   useEffect(() => {
     if (settings.data) setForm(settings.data);
@@ -161,15 +162,38 @@ export default function SettingsScreen() {
 
   const save = useMutation({
     mutationFn: () => {
-      const { webhook_url: _w, configured: _c, has_emergent_llm_key: _a, emergent_llm_key_hint: _b, has_emergent_email_key: _d, emergent_email_key_hint: _e, ai_configured: _f, email_configured: _g, ...body } = form as Settings;
-      return api.put<Settings>("/settings", { ...body, emergent_llm_key: llmKey.trim(), emergent_email_key: emailKey.trim() });
+      const {
+        webhook_url: _w,
+        configured: _c,
+        has_emergent_llm_key: _a,
+        emergent_llm_key_hint: _b,
+        has_emergent_email_key: _d,
+        emergent_email_key_hint: _e,
+        ai_configured: _f,
+        email_configured: _g,
+        has_wa9x_api_key: _h,
+        wa9x_api_key_hint: _i,
+        ...body
+      } = form as Settings;
+      return api.put<Settings>("/settings", { ...body, emergent_llm_key: llmKey.trim(), emergent_email_key: emailKey.trim(), wa9x_api_key: waKey.trim() });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["wa-status"] });
       setLlmKey("");
       setEmailKey("");
+      setWaKey("");
       toast.show("Settings save ho gayi", "success");
+    },
+    onError: (e: Error) => toast.show(e.message, "error"),
+  });
+
+  const rotateWebhook = useMutation({
+    mutationFn: () => api.post<Settings>("/settings/rotate-webhook-secret"),
+    onSuccess: (d) => {
+      qc.setQueryData(["settings"], d);
+      qc.invalidateQueries({ queryKey: ["wa-status"] });
+      toast.show("Naya webhook URL ban gaya — wa.9x mein update karo", "success");
     },
     onError: (e: Error) => toast.show(e.message, "error"),
   });
@@ -185,7 +209,8 @@ export default function SettingsScreen() {
     onSuccess: () => {
       setOldPin("");
       setNewPin("");
-      toast.show("PIN badal gaya", "success");
+      toast.show("PIN badal gaya — naye PIN se login karo", "success");
+      setTimeout(() => void logout(), 900);
     },
     onError: (e: Error) => toast.show(e.message, "error"),
   });
@@ -209,14 +234,23 @@ export default function SettingsScreen() {
             />
           </View>
           <Field testID="settings-base-url" label="wa.9x Base URL" value={form.wa9x_base_url ?? ""} onChangeText={set("wa9x_base_url")} placeholder="https://api.wa9x.example" autoCapitalize="none" keyboardType="url" />
-          <Field testID="settings-api-key" label="wa.9x API Key" value={form.wa9x_api_key ?? ""} onChangeText={set("wa9x_api_key")} placeholder="API key" autoCapitalize="none" secureTextEntry />
+          <Field
+            testID="settings-api-key"
+            label={`wa.9x API Key ${form.has_wa9x_api_key ? `· saved ${form.wa9x_api_key_hint}` : "· NOT SET"}`}
+            value={waKey}
+            onChangeText={setWaKey}
+            placeholder={form.has_wa9x_api_key ? "Nayi key daalne ke liye type karo (hatane ke liye -)" : "API key"}
+            autoCapitalize="none"
+            secureTextEntry
+          />
           <Field testID="settings-instance-id" label="Instance ID (optional)" value={form.wa9x_instance_id ?? ""} onChangeText={set("wa9x_instance_id")} placeholder="instance id" autoCapitalize="none" />
           <Field testID="settings-send-path" label="Send text path" value={form.wa9x_send_path ?? ""} onChangeText={set("wa9x_send_path")} placeholder="/send-message" autoCapitalize="none" />
           <Field testID="settings-send-doc-path" label="Send document path" value={form.wa9x_send_doc_path ?? ""} onChangeText={set("wa9x_send_doc_path")} placeholder="/send-media" autoCapitalize="none" />
-          <Text style={styles.hint}>Webhook URL — wa.9x dashboard mein incoming message webhook yahan point karo:</Text>
+          <Text style={styles.hint}>Webhook URL — wa.9x dashboard mein incoming message webhook yahan point karo. Isme secret token hai: kisi se share na karo. Bina sahi token wale requests reject hote hain.</Text>
           <Text selectable style={styles.code} testID="settings-webhook-url">
             {settings.data?.webhook_url ?? "..."}
           </Text>
+          <Button testID="settings-rotate-webhook-button" title="Naya webhook token banao" variant="secondary" icon="refresh-cw" onPress={() => rotateWebhook.mutate()} loading={rotateWebhook.isPending} style={{ marginBottom: 16 }} />
           <Field testID="settings-public-url" label="Public base URL (files ke liye)" value={form.public_base_url ?? ""} onChangeText={set("public_base_url")} placeholder="https://your-app.emergent.host" autoCapitalize="none" keyboardType="url" />
         </Card>
 
@@ -264,8 +298,9 @@ export default function SettingsScreen() {
 
         <Text style={styles.section}>Security</Text>
         <Card style={styles.card}>
-          <Field testID="settings-old-pin" label="Purana PIN" value={oldPin} onChangeText={setOldPin} keyboardType="number-pad" secureTextEntry maxLength={6} mono />
-          <Field testID="settings-new-pin" label="Naya PIN (4-6 digit)" value={newPin} onChangeText={setNewPin} keyboardType="number-pad" secureTextEntry maxLength={6} mono />
+          <Field testID="settings-old-pin" label="Purana PIN" value={oldPin} onChangeText={setOldPin} keyboardType="number-pad" secureTextEntry maxLength={8} mono />
+          <Field testID="settings-new-pin" label="Naya PIN (4-8 digit, 6 recommended)" value={newPin} onChangeText={setNewPin} keyboardType="number-pad" secureTextEntry maxLength={8} mono />
+          <Text style={styles.hint}>PIN badalne pe sab purane logins invalid ho jaate hain (dobara login).</Text>
           <Button testID="settings-change-pin-button" title="PIN badlo" variant="secondary" icon="lock" onPress={() => changePin.mutate()} loading={changePin.isPending} disabled={oldPin.length < 4 || newPin.length < 4} />
         </Card>
 

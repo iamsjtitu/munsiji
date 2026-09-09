@@ -23,9 +23,10 @@ Poora stack ek command se: **MongoDB + FastAPI backend + Web app + HTTPS (Caddy)
 curl -fsSL https://raw.githubusercontent.com/iamsjtitu/munsiji/main/deploy/install.sh | sudo bash -s -- \
   --repo https://github.com/iamsjtitu/munsiji.git \
   --domain munsiji.app --email admin@munsiji.com \
-  --owner 917205930002 --pin 3366 \
+  --owner 917205930002 \
   --llm-key sk-emergent-xxxx --email-key ek_xxxx
 ```
+(PIN script khud poochega — `--pin 123456` bhi de sakte ho, par shell history mein reh jaata hai.)
 
 **Private repo** (GitHub → Settings → Developer settings → Fine-grained token, repo *Contents: read*):
 ```bash
@@ -33,7 +34,7 @@ sudo git clone https://<TOKEN>@github.com/iamsjtitu/munsiji.git /opt/munsiji
 sudo bash /opt/munsiji/deploy/install.sh \
   --repo https://<TOKEN>@github.com/iamsjtitu/munsiji.git \
   --domain munsiji.app --email admin@munsiji.com \
-  --owner 917205930002 --pin 3366 \
+  --owner 917205930002 \
   --llm-key sk-emergent-xxxx --email-key ek_xxxx
 ```
 (token remote URL mein reh jaata hai — updates isi se fetch honge)
@@ -46,8 +47,10 @@ Script: Docker install → swap → clone `/opt/munsiji` → `.env` (random JWT 
 1. `https://munsiji.app` → PIN `3366` se login.
 2. **Emergent Keys**: LLM key / Email key yahan se bhi badal sakte ho (`.env` ke upar priority).
 3. **Email Alerts**: owner email (`admin@munsiji.com`), on/off switch, **Test email bhejo**. Alerts: galat PIN ×5 (lock), wa.9x reply fail, AI parsing fail, server update fail. Max 1 / 30 min per type.
-4. **WhatsApp (wa.9x)**: Base URL + API key daalo, provider **wa.9x live**, Save. wa.9x dashboard mein webhook: `https://munsiji.app/api/whatsapp/webhook`
+4. **WhatsApp (wa.9x)**: Base URL + API key daalo, provider **wa.9x live**, Save. wa.9x dashboard mein webhook = Settings mein dikhaya **poora URL (secret token ke saath)**: `https://munsiji.app/api/whatsapp/webhook?token=...` — bina token requests reject. "Naya webhook token banao" se rotate.
 5. Phone app ko VPS se connect: PIN screen ke upar-right **server icon** → `https://munsiji.app` → Save.
+
+Security defaults: PIN 4–8 digit (install pe prompt, common PINs reject), bar-bar galat PIN pe backoff lock + email alert, PIN badalne pe purane logins invalid, statement download links random token + 24h expiry (`EXPORT_LINK_TTL_HOURS`), backend container non-root, security headers (Caddy + nginx CSP).
 
 ## 5. Update flow (Emergent → GitHub → VPS)
 1. Emergent mein changes → **Save to GitHub**.

@@ -1,6 +1,7 @@
 """WhatsApp bot pipeline: message -> parse -> ledger action -> Hinglish reply."""
 import logging
 import os
+import secrets
 from datetime import date, datetime, time, timedelta, timezone
 from typing import List, Optional
 
@@ -74,9 +75,13 @@ async def save_export(fmt: str, ledger: Ledger, d_from: Optional[date], d_to: Op
     if d_from or d_to:
         subtitle = f"Period: {nice_date(d_from) if d_from else 'start'} to {nice_date(d_to) if d_to else 'today'}"
     filename, ctype, data = build_export(fmt, ledger.name, stmt, subtitle)
-    res = await db.export_files.insert_one(ExportFile(filename=filename, content_type=ctype, data=data).to_mongo())
-    url = f"{public_base_url(settings)}/api/files/{res.inserted_id}"
-    return {"url": url, "filename": filename, "format": fmt, "closing_balance": stmt["closing_balance"], "count": len(stmt["rows"])}
+    token = secrets.token_urlsafe(32)
+    ttl_hours = int(os.environ.get("EXPORT_LINK_TTL_HOURS", "24"))
+    await db.export_files.insert_one(
+        ExportFile(token=token, filename=filename, content_type=ctype, data=data, expires_at=now_utc() + timedelta(hours=ttl_hours)).to_mongo()
+    )
+    url = f"{public_base_url(settings)}/api/files/{token}"
+    return {"url": url, "filename": filename, "format": fmt, "closing_balance": stmt["closing_balance"], "count": len(stmt["rows"]), "expires_in_hours": ttl_hours}
 
 
 class Bot:

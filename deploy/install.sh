@@ -14,7 +14,7 @@
 # ------------------------------------------------------------------------------------------
 set -euo pipefail
 
-REPO_URL="" BRANCH="main" DOMAIN="" EMAIL="" PIN="3366" OWNER="" LLM_KEY="" EMAIL_KEY="" OWNER_EMAIL="" APP_DIR="/opt/munsiji"
+REPO_URL="" BRANCH="main" DOMAIN="" EMAIL="" PIN="" OWNER="" LLM_KEY="" EMAIL_KEY="" OWNER_EMAIL="" APP_DIR="/opt/munsiji"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) REPO_URL="$2"; shift 2 ;;
@@ -41,6 +41,12 @@ command -v systemctl >/dev/null || die "systemd nahi mila (Ubuntu/Debian VPS use
 
 if [[ -z "$OWNER" && ! -f "$APP_DIR/.env" ]]; then
   read -rp "Owner WhatsApp number (country code ke saath, e.g. 917205930002): " OWNER </dev/tty
+fi
+if [[ ! -f "$APP_DIR/.env" ]]; then
+  while [[ ! "$PIN" =~ ^[0-9]{4,8}$ ]] || [[ "$PIN" =~ ^(1234|0000|1111|123456|000000|111111)$ ]]; do
+    [[ -n "$PIN" ]] && echo "PIN 4-8 digit ka ho aur common (1234/0000) na ho."
+    read -rsp "App login PIN (4-8 digit, 6 recommended): " PIN </dev/tty; echo
+  done
 fi
 if [[ -z "$LLM_KEY" && ! -f "$APP_DIR/.env" ]]; then
   read -rp "Emergent LLM key (AI parsing ke liye, sk-emergent-...): " LLM_KEY </dev/tty
@@ -80,6 +86,7 @@ fi
 cd "$APP_DIR"
 git config --global --add safe.directory "$APP_DIR" || true
 mkdir -p data/updater
+chown 10001:10001 data/updater && chmod 770 data/updater   # backend container user (uid 10001) writes flags here
 chmod +x deploy/*.sh
 
 log "5/7 Config (.env)"
@@ -131,6 +138,18 @@ else
 fi
 cat >> data/Caddyfile <<'EOF'
   encode gzip
+  header {
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    Referrer-Policy strict-origin-when-cross-origin
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    -Server
+  }
+EOF
+if [[ -n "$DOMAIN" ]]; then
+  printf '  header Strict-Transport-Security "max-age=31536000; includeSubDomains"\n' >> data/Caddyfile
+fi
+cat >> data/Caddyfile <<'EOF'
   handle /api/* {
     reverse_proxy backend:8001
   }
@@ -150,7 +169,7 @@ for unit in deploy/systemd/*; do
   sed "s#/opt/munsiji#$APP_DIR#g" "$unit" > "/etc/systemd/system/$name"
 done
 systemctl daemon-reload
-systemctl enable --now munsiji-updater.path munsiji-autoupdate.timer >/dev/null
+systemctl enable --now munsiji-updater.path munsiji-check.path munsiji-autoupdate.timer >/dev/null
 
 log "7/7 Build & start (pehli baar 5-10 min lag sakte hain)"
 docker compose -f deploy/docker-compose.yml build
@@ -163,6 +182,8 @@ for _ in $(seq 1 40); do
 done
 printf '{"state":"done","message":"Install complete","commit":"%s","updated_at":"%s"}\n' \
   "$(git rev-parse --short HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > data/updater/status.json
+chmod 666 data/updater/status.json
+bash deploy/check-update.sh || true
 
 cat <<EOF
 
@@ -170,9 +191,10 @@ cat <<EOF
   Munsiji install ho gaya!
 
   App (web):        $PUBLIC_URL
-  PIN:              $(grep -E '^OWNER_PIN=' .env | cut -d= -f2-)
-  WhatsApp webhook: $PUBLIC_URL/api/whatsapp/webhook
-                    (wa.9x dashboard mein ye URL daalo; API key app Settings mein)
+  PIN:              (jo aapne set kiya)
+  WhatsApp webhook: app Settings > WhatsApp mein dikhega
+                    ($PUBLIC_URL/api/whatsapp/webhook?token=... — token secret hai,
+                    wa.9x dashboard mein poora URL daalo; API key bhi Settings mein)
 
   Update:   Emergent mein "Save to GitHub" -> app Settings > "Update now"
             (ya home screen ka update bar). Auto-update switch bhi Settings mein hai.

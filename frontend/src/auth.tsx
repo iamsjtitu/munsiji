@@ -72,6 +72,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const setServerUrl = useCallback(
     async (url: string) => {
       const clean = url.trim().replace(/\/+$/, "");
+      if (clean && !/^https:\/\/[^\s/]+/i.test(clean) && !/^http:\/\/(localhost|127\.0\.0\.1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(clean)) {
+        throw new Error("Server URL https:// se shuru hona chahiye");
+      }
       await storage.setItem(SERVER_KEY, clean);
       setBaseUrl(clean || null);
       setServerUrlState(clean);

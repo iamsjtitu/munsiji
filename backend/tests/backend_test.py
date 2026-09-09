@@ -291,24 +291,37 @@ def test_simulate_last_entry_delete(auth, unique_party):
     assert r.json().get("reply")
 
 
-# ---------------------------------------------------- webhook (no auth) & dedupe/whitelist
-def test_webhook_process_and_dedupe():
+# ---------------------------------------------------- webhook (secret token) & dedupe/whitelist
+def _webhook_url(auth):
+    r = SESSION.get(f"{API}/settings", headers=auth, timeout=15)
+    assert r.status_code == 200
+    return r.json()["webhook_url"]
+
+
+def test_webhook_requires_token():
+    payload = {"from": OWNER, "text": "hello", "id": f"nt-{uuid.uuid4().hex[:6]}"}
+    assert SESSION.post(f"{API}/whatsapp/webhook", json=payload, timeout=30).status_code == 401
+    assert SESSION.post(f"{API}/whatsapp/webhook?token=wrong", json=payload, timeout=30).status_code == 401
+
+
+def test_webhook_process_and_dedupe(auth):
+    url = _webhook_url(auth)
     mid = f"testmsg-{uuid.uuid4().hex[:8]}"
     payload = {"from": OWNER, "text": "hello munim", "id": mid}
-    r1 = SESSION.post(f"{API}/whatsapp/webhook", json=payload, timeout=45)
+    r1 = SESSION.post(url, json=payload, timeout=45)
     assert r1.status_code == 200
-    s1 = r1.json().get("status")
-    assert s1 in ("processed", "ok", "created", "clarify", "no_action", "reply", "send_failed", "duplicate") or s1 is not None
+    assert r1.json().get("status") is not None
 
     # send same id again → duplicate
-    r2 = SESSION.post(f"{API}/whatsapp/webhook", json=payload, timeout=30)
+    r2 = SESSION.post(url, json=payload, timeout=30)
     assert r2.status_code == 200
     assert r2.json().get("status") == "duplicate", r2.json()
 
 
-def test_webhook_non_whitelisted_ignored():
+def test_webhook_non_whitelisted_ignored(auth):
+    url = _webhook_url(auth)
     payload = {"from": "919999999999", "text": "hi", "id": f"nw-{uuid.uuid4().hex[:6]}"}
-    r = SESSION.post(f"{API}/whatsapp/webhook", json=payload, timeout=30)
+    r = SESSION.post(url, json=payload, timeout=30)
     assert r.status_code == 200
     assert r.json().get("status") == "ignored", r.json()
 

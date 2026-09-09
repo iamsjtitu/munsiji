@@ -1,5 +1,7 @@
 import logging
 import os
+import re
+import secrets
 from datetime import date, datetime, timezone
 from typing import List, Optional
 
@@ -50,13 +52,21 @@ async def startup():
     await db.transactions.create_index([("ledger_id", 1), ("entry_date", 1)])
     await db.wa_messages.create_index("wa_message_id")
     await db.ledgers.create_index("group_id")
+    await db.export_files.create_index("token", unique=True, sparse=True)
+    await db.export_files.create_index("expires_at", expireAfterSeconds=0)
+    await db.login_guard.create_index("key", unique=True)
     if not await db.settings.find_one({"key": "main"}):
-        s = Settings(owner_number=os.environ["OWNER_WHATSAPP"], pin_hash=hash_pin(os.environ["OWNER_PIN"]), owner_email=os.environ.get("OWNER_EMAIL", ""))
+        s = Settings(owner_number=os.environ["OWNER_WHATSAPP"], pin_hash=hash_pin(os.environ["OWNER_PIN"]), owner_email=os.environ.get("OWNER_EMAIL", ""),
+                     webhook_secret=secrets.token_urlsafe(24))
         await db.settings.insert_one(s.to_mongo())
     else:
         await db.settings.update_one(
             {"key": "main", "$or": [{"owner_email": {"$exists": False}}, {"owner_email": ""}]},
             {"$set": {"owner_email": os.environ.get("OWNER_EMAIL", "")}},
+        )
+        await db.settings.update_one(
+            {"key": "main", "$or": [{"webhook_secret": {"$exists": False}}, {"webhook_secret": ""}]},
+            {"$set": {"webhook_secret": secrets.token_urlsafe(24)}},
         )
     await ensure_default_groups()
     asyncio.create_task(update_failure_watcher())
@@ -98,7 +108,12 @@ def parse_entry_date(value: Optional[str]) -> datetime:
 
 # ------------------------------------------------------------------ public
 class LoginBody(BaseModel):
-    pin: str = Field(pattern=r"^\d{4,6}$")
+    pin: str = Field(pattern=r"^\d{4,8}$")
+
+
+def client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    return (fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "unknown"))[:64]
 
 
 @api.get("/health")
@@ -107,28 +122,47 @@ async def health():
 
 
 @api.post("/auth/login")
-async def login(body: LoginBody):
-    check_lockout()
+async def login(body: LoginBody, request: Request):
+    ip = client_ip(request)
+    await check_lockout(ip)
     s = await get_settings()
     if not verify_pin(body.pin, s.pin_hash):
-        if record_fail():
-            await send_alert("pin_lockout", "Galat PIN — 5 baar try hua, 60s lock", ["Kisi ne 5 baar galat PIN daala; login 60 second ke liye lock hai.", "Agar ye aap nahi the to Settings se PIN badal lo."])
+        if await record_fail(ip):
+            await send_alert("pin_lockout", "Galat PIN — bahut baar try hua, login lock", [f"IP {ip} se baar-baar galat PIN daala gaya; login kuch der ke liye lock hai.", "Agar ye aap nahi the to Settings se PIN badal lo."])
         raise HTTPException(status_code=401, detail="Galat PIN")
-    record_success()
+    await record_success(ip)
     return {"access_token": make_token(), "token_type": "bearer"}
 
 
-@api.get("/files/{file_id}")
-async def get_file(file_id: str):
-    doc = await db.export_files.find_one({"_id": oid(file_id)})
+@api.get("/files/{token}")
+async def get_file(token: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,64}", token):
+        raise HTTPException(status_code=404, detail="File not found")
+    doc = await db.export_files.find_one({"token": token})
     if not doc:
         raise HTTPException(status_code=404, detail="File not found")
+    exp = doc.get("expires_at")
+    if exp and (exp if exp.tzinfo else exp.replace(tzinfo=timezone.utc)) < now_utc():
+        raise HTTPException(status_code=410, detail="Link expire ho gaya — app se dobara export karo")
     return Response(content=bytes(doc["data"]), media_type=doc["content_type"],
-                    headers={"Content-Disposition": f'attachment; filename="{doc["filename"]}"'})
+                    headers={"Content-Disposition": f'attachment; filename="{doc["filename"]}"', "Cache-Control": "private, no-store",
+                             "X-Content-Type-Options": "nosniff"})
+
+
+def _webhook_token(request: Request) -> str:
+    return request.query_params.get("token") or request.headers.get("x-webhook-token") or ""
+
+
+async def _require_webhook_token(request: Request) -> Settings:
+    s = await get_settings()
+    if not s.webhook_secret or not secrets.compare_digest(_webhook_token(request), s.webhook_secret):
+        raise HTTPException(status_code=401, detail="Invalid webhook token")
+    return s
 
 
 @api.post("/whatsapp/webhook")
 async def whatsapp_webhook(request: Request):
+    settings = await _require_webhook_token(request)
     try:
         payload = await request.json()
     except Exception:  # noqa: BLE001
@@ -139,7 +173,6 @@ async def whatsapp_webhook(request: Request):
         return {"status": "ignored", "reason": "no text message"}
     result = await handle_message(msg.sender, msg.text, msg.message_id, source="whatsapp")
     if result["reply"]:
-        settings = await get_settings()
         provider = get_provider(settings)
         try:
             await provider.send_text(msg.sender, result["reply"])
@@ -156,7 +189,8 @@ async def whatsapp_webhook(request: Request):
 
 @api.get("/whatsapp/webhook")
 async def whatsapp_webhook_verify(request: Request):
-    # some providers verify the URL with GET (echo challenge if present)
+    # some providers verify the URL with GET (echo challenge if present) — token still required
+    await _require_webhook_token(request)
     challenge = request.query_params.get("hub.challenge") or request.query_params.get("challenge")
     return Response(content=challenge or "ok", media_type="text/plain")
 
@@ -188,7 +222,7 @@ async def create_group(body: GroupBody):
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "Naam zaroori hai")
-    if await db.groups.find_one({"deleted_at": None, "name": {"$regex": f"^{name}$", "$options": "i"}}):
+    if await db.groups.find_one({"deleted_at": None, "name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}}):
         raise HTTPException(400, "Ye group already hai")
     g = Group(name=name)
     res = await db.groups.insert_one(g.to_mongo())
@@ -490,22 +524,27 @@ class SettingsPatch(BaseModel):
 
 class PinChange(BaseModel):
     old_pin: str
-    new_pin: str = Field(pattern=r"^\d{4,6}$")
+    new_pin: str = Field(pattern=r"^\d{4,8}$")
 
 
-SECRET_FIELDS = ("emergent_llm_key", "emergent_email_key")
+SECRET_FIELDS = ("emergent_llm_key", "emergent_email_key", "wa9x_api_key")
+
+
+def webhook_url(s: Settings) -> str:
+    return f"{public_base_url(s)}/api/whatsapp/webhook?token={s.webhook_secret}"
 
 
 def settings_api(s: Settings) -> dict:
     d = s.api()
     d.pop("pin_hash", None)
+    d.pop("webhook_secret", None)
     for f in SECRET_FIELDS:
         val = d.pop(f, "") or ""
         d[f"has_{f}"] = bool(val)
         d[f"{f}_hint"] = f"••••{val[-4:]}" if val else ""
     d["ai_configured"] = bool(s.emergent_llm_key or os.environ.get("EMERGENT_LLM_KEY"))
     d["email_configured"] = bool((s.emergent_email_key or os.environ.get("EMERGENT_EMAIL_KEY")) and s.owner_email)
-    d["webhook_url"] = f"{public_base_url(s)}/api/whatsapp/webhook"
+    d["webhook_url"] = webhook_url(s)
     d["configured"] = bool(s.wa9x_base_url and s.wa9x_api_key)
     return d
 
@@ -558,8 +597,17 @@ async def change_pin(body: PinChange):
     s = await get_settings()
     if not verify_pin(body.old_pin, s.pin_hash):
         raise HTTPException(401, "Purana PIN galat hai")
-    await db.settings.update_one({"key": "main"}, {"$set": {"pin_hash": hash_pin(body.new_pin), "updated_at": now_utc()}})
-    return {"ok": True}
+    if body.new_pin in ("1234", "0000", "1111", "123456", "000000", "111111"):
+        raise HTTPException(400, "Ye PIN bahut common hai — koi aur chuno")
+    # all existing tokens are revoked (see auth.current_owner); the client re-logs in
+    await db.settings.update_one({"key": "main"}, {"$set": {"pin_hash": hash_pin(body.new_pin), "pin_changed_at": now_utc(), "updated_at": now_utc()}})
+    return {"ok": True, "relogin": True}
+
+
+@protected.post("/settings/rotate-webhook-secret")
+async def rotate_webhook_secret():
+    await db.settings.update_one({"key": "main"}, {"$set": {"webhook_secret": secrets.token_urlsafe(24), "updated_at": now_utc()}})
+    return settings_api(await get_settings())
 
 
 # ------------------------------------------------------------------ whatsapp (app side)
@@ -586,7 +634,7 @@ async def wa_status():
     pending = await db.pending.find_one({})
     last = await db.wa_messages.find_one({"source": "whatsapp"}, sort=[("created_at", -1)])
     return {"provider": s.provider, "configured": bool(s.wa9x_base_url and s.wa9x_api_key), "owner_number": s.owner_number,
-            "webhook_url": f"{public_base_url(s)}/api/whatsapp/webhook", "pending_question": pending["question"] if pending else None,
+            "webhook_url": webhook_url(s), "pending_question": pending["question"] if pending else None,
             "last_whatsapp_at": last["created_at"].isoformat() if last else None}
 
 
@@ -624,4 +672,14 @@ async def system_auto_update(body: AutoUpdateBody):
 
 app.include_router(api)
 app.include_router(protected)
-app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Bearer tokens only (no cookies) -> no credentials needed for CORS
+app.add_middleware(CORSMiddleware, allow_credentials=False, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Cache-Control", "no-store")
+    return response

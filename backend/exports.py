@@ -2,6 +2,7 @@
 import csv
 import io
 from datetime import datetime
+from html import escape
 from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook
@@ -26,6 +27,12 @@ def _n(v: float) -> str:
     return f"{v:,.2f}" if v else ""
 
 
+def _safe_text(s: str) -> str:
+    """Neutralise spreadsheet formula injection in user-provided text."""
+    s = str(s or "")
+    return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
+
+
 def _rows(stmt: dict):
     out = [["Date", "Particulars", "Debit", "Credit", "Balance"]]
     out.append(["", "Opening Balance", "", "", f"{stmt['opening_balance']:,.2f}"])
@@ -33,7 +40,7 @@ def _rows(stmt: dict):
         out.append(
             [
                 _d(r["entry_date"]),
-                r.get("note") or ("Diya" if r["direction"] == "debit" else "Mila"),
+                _safe_text(r.get("note") or ("Diya" if r["direction"] == "debit" else "Mila")),
                 _n(r["amount"]) if r["direction"] == "debit" else "",
                 _n(r["amount"]) if r["direction"] == "credit" else "",
                 f"{r['running_balance']:,.2f}",
@@ -46,7 +53,7 @@ def _rows(stmt: dict):
 def to_csv(ledger_name: str, stmt: dict) -> bytes:
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow([f"Ledger: {ledger_name}"])
+    w.writerow([f"Ledger: {_safe_text(ledger_name)}"])
     for row in _rows(stmt):
         w.writerow(row)
     return buf.getvalue().encode("utf-8-sig")
@@ -56,7 +63,7 @@ def to_xlsx(ledger_name: str, stmt: dict, subtitle: str = "") -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Statement"
-    ws.append([f"Ledger: {ledger_name}"])
+    ws.append([f"Ledger: {_safe_text(ledger_name)}"])
     ws["A1"].font = Font(bold=True, size=13)
     if subtitle:
         ws.append([subtitle])
@@ -85,9 +92,9 @@ def to_pdf(ledger_name: str, stmt: dict, subtitle: str = "") -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=14 * mm, rightMargin=14 * mm, topMargin=14 * mm, bottomMargin=14 * mm)
     styles = getSampleStyleSheet()
-    story = [Paragraph(f"<b>{ledger_name}</b> — Ledger Statement", styles["Title"])]
+    story = [Paragraph(f"<b>{escape(ledger_name)}</b> — Ledger Statement", styles["Title"])]
     if subtitle:
-        story.append(Paragraph(subtitle, styles["Normal"]))
+        story.append(Paragraph(escape(subtitle), styles["Normal"]))
     bal = stmt["closing_balance"]
     story.append(Paragraph(f"Closing balance: <b>₹{abs(bal):,.2f} {'lena hai' if bal > 0 else 'dena hai' if bal < 0 else '(settled)'}</b>", styles["Normal"]))
     story.append(Spacer(1, 6 * mm))

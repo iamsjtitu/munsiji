@@ -47,13 +47,7 @@
         user-select: text;
       }
     </style>
-    <script>
-      if ("serviceWorker" in navigator) {
-        window.addEventListener("load", function () {
-          navigator.serviceWorker.register("/sw.js").catch(function () {});
-        });
-      }
-    </script>
+    <script src="/pwa.js" defer></script>
   </head>
 
   <body>
