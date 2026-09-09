@@ -89,7 +89,7 @@ async def save_export(fmt: str, ledger: Ledger, d_from: Optional[date], d_to: Op
     subtitle = ""
     if d_from or d_to:
         subtitle = f"Period: {nice_date(d_from) if d_from else 'start'} to {nice_date(d_to) if d_to else 'today'}"
-    filename, ctype, data = build_export(fmt, ledger.name, stmt, subtitle)
+    filename, ctype, data = build_export(fmt, ledger.name, stmt, subtitle, meta={"kind": ledger.kind, "group_name": await _group_name(ledger.group_id)})
     token = secrets.token_urlsafe(32)
     ttl_hours = int(os.environ.get("EXPORT_LINK_TTL_HOURS", "24"))
     await db.export_files.insert_one(
