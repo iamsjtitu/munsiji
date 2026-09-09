@@ -3,10 +3,10 @@ FROM node:20-bookworm-slim AS build
 WORKDIR /app
 ENV CI=1 EXPO_NO_TELEMETRY=1 NODE_OPTIONS=--max-old-space-size=2048
 
-COPY frontend/package.json frontend/yarn.lock ./
-# preinstall hook is an Emergent dev-only guard; not needed in the image
+COPY frontend/package.json frontend/yarn.loc[k] frontend/.npmr[c] ./
+# preinstall hook is an Emergent dev-only guard; not needed in the image. Lockfile is optional (may not be committed).
 RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));delete p.scripts.preinstall;fs.writeFileSync('package.json',JSON.stringify(p,null,2))" \
- && yarn install --frozen-lockfile --network-timeout 600000
+ && if [ -f yarn.lock ]; then yarn install --frozen-lockfile --network-timeout 600000; else yarn install --network-timeout 600000; fi
 
 COPY frontend/ ./
 RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));delete p.scripts.preinstall;fs.writeFileSync('package.json',JSON.stringify(p,null,2))" \
